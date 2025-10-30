@@ -90,6 +90,10 @@ This guarantees:
 
 **Non-git Installation:**
 ```bash
+# Check if tracked by parent git repo
+# If tracked: Skip backup (git has version history)
+# If not tracked: Create backup
+
 rm -rf strapi-toolkit           # Complete removal
 git clone --depth 1 [repo]      # Fresh download
 rm -rf strapi-toolkit/.git      # Remove git metadata
@@ -97,7 +101,8 @@ rm -rf strapi-toolkit/.git      # Remove git metadata
 
 This guarantees:
 - ✅ Complete replacement with exact repository state
-- ✅ Backup created before removal
+- ✅ Backup created only if NOT tracked by git (prevents clutter)
+- ✅ No backup pollution in git-tracked projects
 
 **Why this matters:**
 If a script is renamed or deleted in the repository (e.g., `old-script.sh` → `new-script.sh`), a simple `git pull` would leave both files, potentially causing confusion or using outdated scripts. Our update method ensures you always have exactly what's in the repository.
