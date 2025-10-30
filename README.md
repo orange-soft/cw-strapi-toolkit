@@ -125,7 +125,7 @@ bash strapi-toolkit/pm2/pm2-manager.sh status
 # Restart application
 bash strapi-toolkit/pm2/pm2-manager.sh restart
 
-# View logs
+# View logs (current app only)
 bash strapi-toolkit/pm2/pm2-manager.sh logs 50
 ```
 

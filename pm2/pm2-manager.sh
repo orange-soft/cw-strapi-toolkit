@@ -107,8 +107,18 @@ case $COMMAND in
 
     logs)
         LINES=${2:-50}
-        echo "📝 PM2 Logs (last ${LINES} lines):"
-        pm2 logs --lines ${LINES} --nostream
+
+        # Get the app name from PM2 list (using the ecosystem config)
+        APP_NAME=$(pm2 jlist | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+        if [ -n "$APP_NAME" ]; then
+            echo "📝 PM2 Logs for '${APP_NAME}' (last ${LINES} lines):"
+            pm2 logs "$APP_NAME" --lines ${LINES} --nostream
+        else
+            echo "📝 PM2 Logs (last ${LINES} lines):"
+            echo "⚠️  Could not detect app name, showing all processes:"
+            pm2 logs --lines ${LINES} --nostream
+        fi
         ;;
 
     *)
@@ -120,7 +130,11 @@ case $COMMAND in
         echo "  restart  - Restart PM2 process"
         echo "  delete   - Delete PM2 process"
         echo "  status   - Show PM2 status (default)"
-        echo "  logs     - Show PM2 logs (default: 50 lines)"
+        echo "  logs [N] - Show PM2 logs for current app only (default: 50 lines)"
+        echo ""
+        echo "Examples:"
+        echo "  $0 logs        # Show last 50 lines"
+        echo "  $0 logs 100    # Show last 100 lines"
         echo ""
         echo "Current config: ${ECOSYSTEM_CONFIG}"
         exit 1

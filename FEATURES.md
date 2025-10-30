@@ -289,11 +289,13 @@ bash strapi-toolkit/pm2/pm2-manager.sh restart
 # Delete from PM2 (complete removal)
 bash strapi-toolkit/pm2/pm2-manager.sh delete
 
-# View logs (last 50 lines by default)
+# View logs for current app only (last 50 lines by default)
 bash strapi-toolkit/pm2/pm2-manager.sh logs
 
 # View more log lines
 bash strapi-toolkit/pm2/pm2-manager.sh logs 200
+
+# Note: Only shows logs for the current app, not all PM2 processes
 ```
 
 **Environment Detection Logic:**
