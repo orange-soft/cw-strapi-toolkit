@@ -30,8 +30,23 @@ if [ -d "$INSTALL_DIR" ]; then
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         echo "🔄 Updating toolkit..."
-        cd "$INSTALL_DIR"
-        git pull origin "$REPO_BRANCH"
+
+        # Check if .git exists (git-tracked version)
+        if [ -d "$INSTALL_DIR/.git" ]; then
+            # Update via git pull
+            cd "$INSTALL_DIR"
+            git pull origin "$REPO_BRANCH"
+            cd ..
+        else
+            # No .git folder - replace entire directory
+            echo "📦 Removing old version..."
+            rm -rf "$INSTALL_DIR"
+            echo "📥 Downloading latest version..."
+            git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+            echo "🧹 Cleaning up git metadata..."
+            rm -rf "$INSTALL_DIR/.git"
+        fi
+
         echo "✅ Toolkit updated!"
     else
         echo "Installation cancelled."
@@ -42,6 +57,10 @@ else
 
     # Clone repository
     git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+
+    # Remove .git folder to allow versioning in parent repo
+    echo "🧹 Cleaning up git metadata..."
+    rm -rf "$INSTALL_DIR/.git"
 
     echo "✅ Toolkit installed!"
 fi
