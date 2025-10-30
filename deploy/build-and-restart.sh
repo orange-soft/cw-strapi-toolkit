@@ -31,6 +31,22 @@ if ! grep -q "\"@strapi/strapi\"" "${APP_ROOT}/package.json"; then
     fi
 fi
 
+# Validate toolkit installation
+if [ ! -d "${APP_ROOT}/strapi-toolkit" ]; then
+    echo "❌ Error: strapi-toolkit directory not found"
+    echo "   Please install the toolkit first:"
+    echo "   curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/master/install.sh | bash"
+    exit 1
+fi
+
+if [ ! -f "${APP_ROOT}/strapi-toolkit/pm2/pm2-manager.sh" ]; then
+    echo "❌ Error: strapi-toolkit/pm2/pm2-manager.sh not found"
+    echo "   The toolkit installation appears to be incomplete"
+    exit 1
+fi
+
+echo "✅ Toolkit installation verified"
+
 # Load nvm from master user's home
 export NVM_DIR="${MASTER_HOME}/.nvm"
 if [ -s "$NVM_DIR/nvm.sh" ]; then
@@ -105,7 +121,8 @@ fi
 
 echo ""
 echo "🛑 Stopping PM2 process..."
-bash "${APP_ROOT}"/scripts/pm2/pm2-manager.sh stop || true
+# Run stop command (ignore error if PM2 process is not running)
+bash "${APP_ROOT}"/strapi-toolkit/pm2/pm2-manager.sh stop || true
 
 echo ""
 echo "🏗️  Building Strapi admin panel..."
@@ -141,7 +158,7 @@ echo ""
 echo "♻️  Restarting PM2 process..."
 RESTART_START=$(date +%s)
 
-if bash "${APP_ROOT}"/scripts/pm2/pm2-manager.sh restart; then
+if bash "${APP_ROOT}"/strapi-toolkit/pm2/pm2-manager.sh restart; then
     RESTART_END=$(date +%s)
     RESTART_DURATION=$((RESTART_END - RESTART_START))
     echo "✅ PM2 restarted in ${RESTART_DURATION}s"
@@ -151,11 +168,11 @@ else
 fi
 
 echo ""
-bash "${APP_ROOT}"/scripts/pm2/pm2-manager.sh status
+bash "${APP_ROOT}"/strapi-toolkit/pm2/pm2-manager.sh status
 
 echo ""
 echo "📝 Recent Logs (last 15 lines):"
-bash "${APP_ROOT}"/scripts/pm2/pm2-manager.sh logs 15
+bash "${APP_ROOT}"/strapi-toolkit/pm2/pm2-manager.sh logs 15
 
 END_TIME=$(date +%s)
 TOTAL_DURATION=$((END_TIME - START_TIME))

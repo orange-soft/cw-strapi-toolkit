@@ -96,10 +96,13 @@ bash strapi-toolkit/cloudways/sync-to-cloudways.sh \
   --port 22000
 ```
 
-**Pro tip:** Use positional file argument for tab completion:
-```bash
-bash strapi-toolkit/cloudways/sync-to-cloudways.sh ./[TAB] --target user@host
-```
+**Pro tips:**
+- Use positional file argument for tab completion:
+  ```bash
+  bash strapi-toolkit/cloudways/sync-to-cloudways.sh ./[TAB] --target user@host
+  ```
+- For CI/CD or if using default port 22, no need to specify `--port` (it defaults to 22)
+- Set `CLOUDWAYS_PORT` environment variable for custom default port across all operations
 
 ### 4. Manage PM2 Process
 

@@ -13,7 +13,7 @@ Common workflows for managing Strapi across different environments.
 ssh admin@legacy-server
 
 # Export Strapi data
-bash scripts/backup/export.sh --output ./backups
+bash strapi-toolkit/backup/export.sh --output ./backups
 
 # Result: backup-YYYYMMDD_HHMMSS.tar.gz created
 ```
@@ -29,7 +29,7 @@ scp admin@legacy-server:~/backups/backup-20251030_150000.tar.gz ./
 
 ```bash
 # From your local machine
-bash scripts/cloudways/sync-to-cloudways.sh \
+bash strapi-toolkit/cloudways/sync-to-cloudways.sh \
   --file=backup-20251030_150000.tar.gz \
   --host=server.cloudways.com \
   --port=22000 \
@@ -47,7 +47,7 @@ ssh -p 22000 master@server.cloudways.com
 cd applications/xxx/public_html/gocomm-strapi
 
 # Import data
-bash scripts/backup/import.sh --file=~/backups/backup-20251030_150000.tar.gz
+bash strapi-toolkit/backup/import.sh --file=~/backups/backup-20251030_150000.tar.gz
 ```
 
 ---
@@ -62,7 +62,7 @@ ssh -p 22000 master@cloudways-prod
 
 # Export data
 cd applications/xxx/public_html/gocomm-strapi
-bash scripts/backup/export.sh --output ~/backups
+bash strapi-toolkit/backup/export.sh --output ~/backups
 
 # Result: backup-20251030_160000.tar.gz
 ```
@@ -81,7 +81,7 @@ scp -P 22000 master@cloudways-prod:~/backups/backup-20251030_160000.tar.gz ./
 cd ~/Projects/gocomm-strapi
 
 # Import production data
-bash scripts/backup/import.sh --file=./backup-20251030_160000.tar.gz
+bash strapi-toolkit/backup/import.sh --file=./backup-20251030_160000.tar.gz
 ```
 
 ### Step 4: Develop Locally
@@ -102,7 +102,7 @@ npm run develop
 
 ```bash
 # On local machine
-bash scripts/backup/export.sh --output ./
+bash strapi-toolkit/backup/export.sh --output ./
 
 # Result: backup-20251030_170000.tar.gz
 ```
@@ -111,7 +111,7 @@ bash scripts/backup/export.sh --output ./
 
 ```bash
 # Upload using sync script
-bash scripts/cloudways/sync-to-cloudways.sh \
+bash strapi-toolkit/cloudways/sync-to-cloudways.sh \
   --file=backup-20251030_170000.tar.gz \
   --profile=production
 ```
@@ -124,7 +124,7 @@ ssh -p 22000 master@cloudways-prod
 
 # Import
 cd applications/xxx/public_html/gocomm-strapi
-bash scripts/backup/import.sh --file=~/backup-20251030_170000.tar.gz
+bash strapi-toolkit/backup/import.sh --file=~/backup-20251030_170000.tar.gz
 ```
 
 ---
@@ -135,7 +135,7 @@ bash scripts/backup/import.sh --file=~/backup-20251030_170000.tar.gz
 
 ```bash
 # On Cloudways
-bash scripts/backup/export.sh --output ~/backups
+bash strapi-toolkit/backup/export.sh --output ~/backups
 # Download to local (see Workflow 2)
 ```
 
@@ -171,7 +171,7 @@ git push origin gocomm.cms.my
 ssh -p 22000 master@cloudways-prod
 cd applications/xxx/public_html/gocomm-strapi
 git pull origin gocomm.cms.my
-bash scripts/deploy/build-and-restart.sh
+bash strapi-toolkit/deploy/build-and-restart.sh
 ```
 
 ---
@@ -182,10 +182,10 @@ bash scripts/deploy/build-and-restart.sh
 
 ```bash
 # Upload backup file
-bash scripts/cloudways/sync-to-cloudways.sh --file=backup.tar.gz
+bash strapi-toolkit/cloudways/sync-to-cloudways.sh --file=backup.tar.gz
 
 # Upload to specific location
-bash scripts/cloudways/sync-to-cloudways.sh \
+bash strapi-toolkit/cloudways/sync-to-cloudways.sh \
   --file=backup.tar.gz \
   --dest=applications/xxx/public_html/gocomm-strapi/
 ```
@@ -194,7 +194,7 @@ bash scripts/cloudways/sync-to-cloudways.sh \
 
 ```bash
 # Upload entire directory
-bash scripts/cloudways/sync-to-cloudways.sh \
+bash strapi-toolkit/cloudways/sync-to-cloudways.sh \
   --file=./my-files/ \
   --dest=uploads/ \
   --verbose
@@ -208,20 +208,20 @@ bash scripts/cloudways/sync-to-cloudways.sh \
 
 ```bash
 # On Cloudways
-bash scripts/backup/export.sh --output ~/emergency-backup
+bash strapi-toolkit/backup/export.sh --output ~/emergency-backup
 ```
 
 ### Step 2: Import Previous Backup
 
 ```bash
 # Import older backup
-bash scripts/backup/import.sh --file=~/backups/backup-20251029_120000.tar.gz
+bash strapi-toolkit/backup/import.sh --file=~/backups/backup-20251029_120000.tar.gz
 ```
 
 ### Step 3: Restart Application
 
 ```bash
-bash scripts/pm2/pm2-manager.sh restart
+bash strapi-toolkit/pm2/pm2-manager.sh restart
 ```
 
 ---
@@ -231,32 +231,32 @@ bash scripts/pm2/pm2-manager.sh restart
 ### Backup Operations
 ```bash
 # Export
-bash scripts/backup/export.sh
+bash strapi-toolkit/backup/export.sh
 
 # Import
-bash scripts/backup/import.sh --file=backup.tar.gz
+bash strapi-toolkit/backup/import.sh --file=backup.tar.gz
 ```
 
 ### File Transfer
 ```bash
 # Upload to Cloudways
-bash scripts/cloudways/sync-to-cloudways.sh --file=myfile.tar.gz
+bash strapi-toolkit/cloudways/sync-to-cloudways.sh --file=myfile.tar.gz
 ```
 
 ### PM2 Operations
 ```bash
 # Status
-bash scripts/pm2/pm2-manager.sh status
+bash strapi-toolkit/pm2/pm2-manager.sh status
 
 # Restart
-bash scripts/pm2/pm2-manager.sh restart
+bash strapi-toolkit/pm2/pm2-manager.sh restart
 
 # Logs
-bash scripts/pm2/pm2-manager.sh logs 50
+bash strapi-toolkit/pm2/pm2-manager.sh logs 50
 ```
 
 ### Deployment
 ```bash
 # Full deployment
-bash scripts/deploy/build-and-restart.sh
+bash strapi-toolkit/deploy/build-and-restart.sh
 ```

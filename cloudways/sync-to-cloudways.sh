@@ -45,7 +45,7 @@ warn_msg() {
 FILE=""
 DEST=""
 SSH_HOST=""
-SSH_PORT="22"  # Default to standard SSH port
+SSH_PORT="${CLOUDWAYS_PORT:-22}"  # Use CLOUDWAYS_PORT env var if set, otherwise default to 22
 SSH_USER=""
 VERBOSE=false
 
@@ -64,10 +64,13 @@ Options:
   --target=USER@HOST   SSH target in user@host format (like SSH)
   --host=HOST          SSH host
   --user=USER          SSH username
-  --port=PORT          SSH port (default: 22)
+  --port=PORT          SSH port (default: 22, or CLOUDWAYS_PORT env var)
   --dest=PATH          Destination path (default: home directory)
   --verbose            Show detailed rsync output
   -h, --help           Show this help
+
+Environment Variables:
+  CLOUDWAYS_PORT       Default SSH port (overridden by --port option)
 
 Examples:
   # Interactive mode (prompts for inputs)

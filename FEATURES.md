@@ -343,9 +343,12 @@ bash strapi-toolkit/cloudways/sync-to-cloudways.sh ./my-folder/ --target user@ho
 |-----------|--------|-------------|----------|---------|
 | File path | `./file` or `--file ./file` | File or directory to upload | Yes | - |
 | Target | `--target user@host` | SSH connection string | Yes | - |
-| Port | `--port 22000` | SSH port | No | 22 |
+| Port | `--port 22000` | SSH port | No | 22 (or `CLOUDWAYS_PORT` env var) |
 | Destination | `--dest backups/` | Path within public_html/ | No | public_html/ |
 | Verbose | `--verbose` | Show detailed output | No | false |
+
+**Environment Variables:**
+- `CLOUDWAYS_PORT`: Set default SSH port for all operations (useful for CI/CD). Can be overridden with `--port` option.
 
 **Why rsync Instead of SCP:**
 Cloudways blocks SCP for security reasons. rsync works over SSH and provides better features:
@@ -366,6 +369,21 @@ bash strapi-toolkit/cloudways/sync-to-cloudways.sh ./[TAB]
 - Transferring local changes to Cloudways
 - Syncing assets or media files
 - Deploying build artifacts
+
+**CI/CD Integration:**
+For GitHub Actions or other CI/CD pipelines, set the `CLOUDWAYS_PORT` environment variable:
+```yaml
+# GitHub Actions example
+- name: Upload to Cloudways
+  env:
+    CLOUDWAYS_PORT: 22  # or 22000 for custom port
+  run: |
+    bash strapi-toolkit/cloudways/sync-to-cloudways.sh \
+      ./backup.tar.gz \
+      --target ${{ secrets.CLOUDWAYS_USER }}@${{ secrets.CLOUDWAYS_HOST }}
+```
+
+If your Cloudways uses the default SSH port 22, you don't need to set `CLOUDWAYS_PORT` at all - it will default to 22.
 
 ---
 
