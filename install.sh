@@ -33,9 +33,15 @@ if [ -d "$INSTALL_DIR" ]; then
 
         # Check if .git exists (git-tracked version)
         if [ -d "$INSTALL_DIR/.git" ]; then
-            # Update via git pull
+            # Update via git reset (ensures exact match with remote)
             cd "$INSTALL_DIR"
-            git pull origin "$REPO_BRANCH"
+            git fetch origin "$REPO_BRANCH"
+            git reset --hard origin/"$REPO_BRANCH"
+            git clean -fd
+
+            # Remove .git folder to prevent submodule conflicts
+            echo "🧹 Removing .git folder (prevents git submodule conflicts)..."
+            rm -rf .git
             cd ..
         else
             # No .git folder - replace entire directory
@@ -101,5 +107,8 @@ echo "   alias strapi-backup='bash $(pwd)/${INSTALL_DIR}/backup/export.sh'"
 echo ""
 echo "3. View workflow examples:"
 echo "   cat ${INSTALL_DIR}/WORKFLOW_EXAMPLES.md"
+echo ""
+echo "4. Update toolkit later:"
+echo "   bash ${INSTALL_DIR}/update.sh"
 echo ""
 echo "✅ Installation complete!"

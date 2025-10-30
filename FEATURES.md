@@ -44,10 +44,97 @@ strapi-toolkit/
 
 ### Update Existing Installation
 
+The toolkit provides multiple update methods:
+
+**Method 1: Update Script (Recommended)**
+```bash
+bash strapi-toolkit/update.sh
+```
+
+**Features:**
+- Shows current and latest version
+- Displays changelog before updating
+- **Ensures exact match with repository** (removes deleted files, adds new files)
+- Creates automatic backup (for non-git installations)
+- Handles both git-tracked and standalone installations
+- Uses `git reset --hard` + `git clean -fd` for git installations (removes local modifications)
+
+**Method 2: Re-run Installer**
+```bash
+curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/master/install.sh | bash
+```
+The installer detects existing installation and prompts to update.
+
+**Method 3: Manual Git Pull**
 ```bash
 cd strapi-toolkit
 git pull origin master
 ```
+Only works if the toolkit was installed with git tracking intact.
+
+### Update Behavior Details
+
+**Git-tracked Installation:**
+```bash
+git fetch origin master
+git reset --hard origin/master  # Ensures exact match
+git clean -fd                    # Removes untracked files
+```
+
+This guarantees:
+- ✅ Modified files are updated
+- ✅ New files are added
+- ✅ Deleted files are removed
+- ✅ No extra files remain
+- ✅ No local modifications persist
+
+**Non-git Installation:**
+```bash
+rm -rf strapi-toolkit           # Complete removal
+git clone --depth 1 [repo]      # Fresh download
+rm -rf strapi-toolkit/.git      # Remove git metadata
+```
+
+This guarantees:
+- ✅ Complete replacement with exact repository state
+- ✅ Backup created before removal
+
+**Why this matters:**
+If a script is renamed or deleted in the repository (e.g., `old-script.sh` → `new-script.sh`), a simple `git pull` would leave both files, potentially causing confusion or using outdated scripts. Our update method ensures you always have exactly what's in the repository.
+
+### Git Submodule Compatibility
+
+**Important:** The toolkit **always removes the `.git` folder** after installation and updates.
+
+**Why?**
+```bash
+# Your project structure:
+my-strapi-app/              ← Your git repo
+├── .git/                   ← Your repo's git
+└── strapi-toolkit/
+    └── .git/               ← ❌ Would cause submodule conflicts!
+```
+
+If `strapi-toolkit/.git` exists, git will treat it as a submodule, causing:
+- ❌ `git status` shows "modified: strapi-toolkit" constantly
+- ❌ `git add .` doesn't work as expected
+- ❌ Deployment scripts get confused
+- ❌ Team members see different states
+
+**Our solution:**
+- ✅ Remove `.git` after every install/update
+- ✅ Toolkit becomes regular files in your repo
+- ✅ No submodule conflicts
+- ✅ Can commit toolkit with your project (optional)
+
+**Update process:**
+1. Use `.git` temporarily for smart updates (fetch, reset, clean)
+2. Remove `.git` immediately after update
+3. Next update detects no `.git`, does full replacement
+
+This gives you the **best of both worlds**:
+- Smart git-based updates when `.git` exists
+- Clean file structure without submodule issues
 
 ---
 

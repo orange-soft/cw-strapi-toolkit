@@ -20,6 +20,18 @@ This toolkit installs to `./strapi-toolkit/` (current working directory) instead
 
 ### Update Existing Installation
 
+**Option 1: Use the update script (recommended)**
+```bash
+bash strapi-toolkit/update.sh
+```
+
+**Option 2: Re-run the installer**
+```bash
+curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/master/install.sh | bash
+# Will prompt to update
+```
+
+**Option 3: Manual git pull (if .git exists)**
 ```bash
 cd strapi-toolkit
 git pull origin master
