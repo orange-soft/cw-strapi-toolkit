@@ -288,8 +288,8 @@ Design:
 git remote add origin https://github.com/orange-soft/cw-strapi-toolkit.git
 
 # Push to GitHub
-git branch -M main
-git push -u origin main
+git branch -M master
+git push -u origin master
 ```
 
 ### Post-Publication Verification
@@ -299,7 +299,7 @@ Test the one-line installer:
 ```bash
 # In a test directory
 cd /tmp
-curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/master/install.sh | bash
 
 # Verify installation
 ls -la strapi-toolkit/

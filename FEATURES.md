@@ -25,7 +25,7 @@ The toolkit installs to the **current working directory** (not a global location
 cd ~/public_html
 
 # Install toolkit
-curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/master/install.sh | bash
 
 # This creates: ./strapi-toolkit/
 ```
@@ -46,7 +46,7 @@ strapi-toolkit/
 
 ```bash
 cd strapi-toolkit
-git pull origin main
+git pull origin master
 ```
 
 ---
@@ -576,11 +576,11 @@ bash strapi-toolkit/cloudways/sync-to-cloudways.sh \
 # 3. On local - Push code changes
 git add .
 git commit -m "Update feature X"
-git push origin main
+git push origin master
 
 # 4. On Cloudways - Pull and deploy
 cd ~/public_html
-git pull origin main
+git pull origin master
 bash strapi-toolkit/deploy/build-and-restart.sh
 
 # 5. Verify deployment
@@ -593,7 +593,7 @@ bash strapi-toolkit/pm2/pm2-manager.sh logs 50
 ```bash
 # 1. Install toolkit
 cd ~/public_html
-curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/master/install.sh | bash
 
 # 2. Clone your Strapi project
 git clone git@github.com:your-org/your-strapi-app.git .
@@ -888,7 +888,7 @@ A: You'll need to modify `backup/export.sh` and `backup/import.sh` to use `pg_du
 A: Absolutely! Fork the repository and modify as needed. The scripts are designed to be readable and maintainable.
 
 **Q: How do I update the toolkit after installation?**
-A: Run the installer again, or `cd strapi-toolkit && git pull origin main`
+A: Run the installer again, or `cd strapi-toolkit && git pull origin master`
 
 **Q: Why use PM2 instead of systemd or other process managers?**
 A: PM2 is the standard for Node.js applications and works across all environments. Cloudways uses PM2 by default.

@@ -2,12 +2,12 @@
 set -e
 
 # Cloudways Strapi Toolkit Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/master/install.sh | bash
 # Or: bash install.sh
 
 INSTALL_DIR="./strapi-toolkit"
 REPO_URL="https://github.com/orange-soft/cw-strapi-toolkit.git"
-REPO_BRANCH="main"
+REPO_BRANCH="master"
 
 echo "========================================"
 echo "📦 Cloudways Strapi Toolkit Installer"

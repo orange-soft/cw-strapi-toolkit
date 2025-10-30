@@ -9,7 +9,7 @@ A comprehensive collection of battle-tested DevOps scripts for managing Strapi a
 cd ~/public_html
 
 # Install toolkit to current directory
-curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/master/install.sh | bash
 
 # This creates: ./strapi-toolkit/
 ```
@@ -22,7 +22,7 @@ This toolkit installs to `./strapi-toolkit/` (current working directory) instead
 
 ```bash
 cd strapi-toolkit
-git pull origin main
+git pull origin master
 ```
 
 ---
@@ -253,11 +253,11 @@ bash strapi-toolkit/cloudways/sync-to-cloudways.sh \
 # 3. On local - Commit and push code
 git add .
 git commit -m "Update feature X"
-git push origin main
+git push origin master
 
 # 4. On Cloudways - Pull and deploy
 cd ~/public_html
-git pull origin main
+git pull origin master
 bash strapi-toolkit/deploy/build-and-restart.sh
 
 # 5. Verify deployment
