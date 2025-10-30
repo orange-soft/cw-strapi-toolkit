@@ -283,8 +283,11 @@ bash strapi-toolkit/pm2/pm2-manager.sh start
 # Stop application
 bash strapi-toolkit/pm2/pm2-manager.sh stop
 
-# Restart application
+# Restart application (with automatic cleanup)
 bash strapi-toolkit/pm2/pm2-manager.sh restart
+
+# Clean up PM2 (fixes "invalid PID" errors)
+bash strapi-toolkit/pm2/pm2-manager.sh cleanup
 
 # Delete from PM2 (complete removal)
 bash strapi-toolkit/pm2/pm2-manager.sh delete
@@ -815,6 +818,30 @@ ls -la
 # Ensure you're the app user
 whoami
 ```
+
+### Issue: PM2 "invalid PID" errors
+
+**Symptoms:**
+```
+PM2 | Error caught while calling pidusage
+PM2 | TypeError: One of the pids provided is invalid
+```
+
+**Cause:** PM2 has stale process metadata from previous processes that no longer exist. Common on multi-tenant servers like Cloudways.
+
+**Solution:**
+```bash
+# Option 1: Automatic cleanup (recommended)
+bash strapi-toolkit/pm2/pm2-manager.sh restart
+# This now includes automatic cleanup
+
+# Option 2: Manual cleanup
+bash strapi-toolkit/pm2/pm2-manager.sh cleanup
+# Then start your app
+bash strapi-toolkit/pm2/pm2-manager.sh start
+```
+
+**Prevention:** The `restart` command now automatically cleans up stale processes before starting fresh.
 
 ### Issue: "Port already in use"
 

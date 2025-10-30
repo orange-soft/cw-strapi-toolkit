@@ -81,7 +81,17 @@ case $COMMAND in
 
     restart)
         echo "♻️  Restarting PM2 process..."
-        if pm2 restart ${ECOSYSTEM_CONFIG}; then
+
+        # Clean up stale processes first (fixes "invalid PID" errors)
+        echo "🧹 Cleaning up stale PM2 processes..."
+        pm2 delete all 2>/dev/null || true
+        pm2 cleardump 2>/dev/null || true
+        pm2 kill 2>/dev/null || true
+        sleep 2
+
+        # Start fresh
+        echo "▶️  Starting PM2 with fresh state..."
+        if pm2 start ${ECOSYSTEM_CONFIG}; then
             pm2 save --force
             echo "✅ PM2 process restarted"
         else
@@ -95,6 +105,15 @@ case $COMMAND in
         pm2 delete ${ECOSYSTEM_CONFIG} || true
         pm2 save --force
         echo "✅ PM2 process deleted"
+        ;;
+
+    cleanup)
+        echo "🧹 Cleaning up PM2 (fixes stale PID errors)..."
+        pm2 delete all 2>/dev/null || true
+        pm2 cleardump 2>/dev/null || true
+        pm2 kill 2>/dev/null || true
+        echo "✅ PM2 cleaned up - all processes removed"
+        echo "   Run 'start' or 'restart' to start your app again"
         ;;
 
     status|list)
@@ -122,17 +141,20 @@ case $COMMAND in
         ;;
 
     *)
-        echo "Usage: $0 [start|stop|restart|delete|status|logs]"
+        echo "Usage: $0 [start|stop|restart|delete|cleanup|status|logs]"
         echo ""
         echo "Commands:"
         echo "  start    - Start PM2 process"
         echo "  stop     - Stop PM2 process"
-        echo "  restart  - Restart PM2 process"
+        echo "  restart  - Restart PM2 process (with automatic cleanup)"
         echo "  delete   - Delete PM2 process"
+        echo "  cleanup  - Clean up PM2 (fixes stale PID errors)"
         echo "  status   - Show PM2 status (default)"
         echo "  logs [N] - Show PM2 logs for current app only (default: 50 lines)"
         echo ""
         echo "Examples:"
+        echo "  $0 restart     # Restart with automatic cleanup"
+        echo "  $0 cleanup     # Manual cleanup if seeing PID errors"
         echo "  $0 logs        # Show last 50 lines"
         echo "  $0 logs 100    # Show last 100 lines"
         echo ""
