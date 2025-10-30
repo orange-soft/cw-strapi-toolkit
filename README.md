@@ -1,273 +1,328 @@
-# Strapi DevOps Toolkit
+# Cloudways Strapi Toolkit
 
-A collection of battle-tested scripts for managing Strapi applications across different environments (local development, legacy servers, Cloudways production).
+A comprehensive collection of battle-tested DevOps scripts for managing Strapi applications across different environments: local development, legacy servers, and Cloudways production hosting.
 
----
-
-## Quick Install
-
-### From Public Repository (if repo is public)
+## 🚀 Quick Install
 
 ```bash
-# One-line install
-curl -fsSL https://raw.githubusercontent.com/your-org/gocomm-strapi/main/scripts/install.sh | bash
+# Navigate to your app directory (important for Cloudways!)
+cd ~/public_html
 
-# Or download and run
-wget https://raw.githubusercontent.com/your-org/gocomm-strapi/main/scripts/install.sh
-bash install.sh
+# Install toolkit to current directory
+curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/main/install.sh | bash
+
+# This creates: ./strapi-toolkit/
 ```
 
-### From Private Repository
+### Why Current Directory?
+
+This toolkit installs to `./strapi-toolkit/` (current working directory) instead of a global location like `~/.strapi-toolkit`. This design ensures compatibility with **Cloudways' multi-tenant environment** where app users are restricted to their own folders (`~/public_html/`).
+
+### Update Existing Installation
 
 ```bash
-# Clone the repo
-git clone git@github.com:your-org/gocomm-strapi.git
-cd gocomm-strapi/scripts
-
-# Or just download the scripts folder
-```
-
-### Manual Installation
-
-```bash
-# Download scripts folder
-mkdir -p ~/.strapi-toolkit
-cd ~/.strapi-toolkit
-# Copy scripts folder here
-
-# Make all scripts executable
-find scripts -name "*.sh" -exec chmod +x {} \;
+cd strapi-toolkit
+git pull origin main
 ```
 
 ---
 
-## What's Included
+## 📚 Documentation
 
-### 📁 Directory Structure
+- **[README.md](./README.md)** - This quick start guide
+- **[FEATURES.md](./FEATURES.md)** - Comprehensive feature documentation (START HERE for detailed info)
+- **[WORKFLOW_EXAMPLES.md](./WORKFLOW_EXAMPLES.md)** - Step-by-step workflow examples
+
+---
+
+## 📁 What's Included
 
 ```
-scripts/
-├── install.sh              # Installer script
-├── README.md               # This file
-├── WORKFLOW_EXAMPLES.md    # Common workflow examples
+strapi-toolkit/
+├── backup/          # Data backup and restore utilities
+│   ├── export.sh    # Export Strapi database + uploads
+│   └── import.sh    # Restore from backup archive
 │
-├── deploy/                 # Deployment orchestration
-│   └── build-and-restart.sh
+├── cloudways/       # Cloudways-specific tools
+│   ├── sync-to-cloudways.sh   # Upload files via rsync
+│   ├── fix-permissions.sh     # Fix file permissions
+│   └── check-ports.sh         # Check port usage
 │
-├── pm2/                    # PM2 process management
-│   └── pm2-manager.sh
+├── deploy/          # Deployment orchestration
+│   └── build-and-restart.sh   # Full deployment workflow
 │
-├── backup/                 # Data backup/restore
-│   ├── export.sh
-│   └── import.sh
+├── pm2/             # PM2 process management
+│   └── pm2-manager.sh         # Unified PM2 interface
 │
-├── setup/                  # Environment setup
-│   ├── generate-env-keys.sh
-│   └── setup-env-keys.sh
-│
-└── cloudways/              # Cloudways-specific utilities
-    ├── fix-permissions.sh
-    ├── check-ports.sh
-    └── sync-to-cloudways.sh
+└── setup/           # Environment configuration
+    ├── generate-env-keys.sh   # Generate security keys
+    └── setup-env-keys.sh      # Auto-update .env file
 ```
 
 ---
 
-## Common Use Cases
+## 🎯 Common Use Cases
 
-### 1. Export Strapi Data
+### 1. Backup Strapi Data
 
 ```bash
-bash scripts/backup/export.sh --output ./backups
+# Interactive mode (prompts for output directory)
+bash strapi-toolkit/backup/export.sh
+
+# Direct mode
+bash strapi-toolkit/backup/export.sh --output ./backups
 ```
 
-### 2. Import Strapi Data
+### 2. Restore Strapi Data
 
 ```bash
-bash scripts/backup/import.sh --file ./backup.tar.gz
+# Interactive mode
+bash strapi-toolkit/backup/import.sh
+
+# Direct mode
+bash strapi-toolkit/backup/import.sh --file ./backup.tar.gz
 ```
 
 ### 3. Upload Files to Cloudways
 
 ```bash
-# Interactive mode
-bash scripts/cloudways/sync-to-cloudways.sh
+# Interactive mode (no trial-and-error!)
+bash strapi-toolkit/cloudways/sync-to-cloudways.sh
 
-# Direct command
-bash scripts/cloudways/sync-to-cloudways.sh \
+# Direct mode with tab completion
+bash strapi-toolkit/cloudways/sync-to-cloudways.sh \
   ./backup.tar.gz \
-  --target=user@host \
-  --port=22000
+  --target user@host \
+  --port 22000
 ```
 
-### 4. Generate Strapi Security Keys
-
+**Pro tip:** Use positional file argument for tab completion:
 ```bash
-bash scripts/setup/generate-env-keys.sh
+bash strapi-toolkit/cloudways/sync-to-cloudways.sh ./[TAB] --target user@host
 ```
 
-### 5. Manage PM2 Process
+### 4. Manage PM2 Process
 
 ```bash
 # Check status
-bash scripts/pm2/pm2-manager.sh status
+bash strapi-toolkit/pm2/pm2-manager.sh status
 
-# Restart
-bash scripts/pm2/pm2-manager.sh restart
+# Restart application
+bash strapi-toolkit/pm2/pm2-manager.sh restart
 
 # View logs
-bash scripts/pm2/pm2-manager.sh logs 50
+bash strapi-toolkit/pm2/pm2-manager.sh logs 50
 ```
 
-### 6. Deploy on Server
+### 5. Deploy Code Updates
 
 ```bash
-bash scripts/deploy/build-and-restart.sh
+# Full deployment: build + restart
+bash strapi-toolkit/deploy/build-and-restart.sh
 ```
 
----
-
-## Environment Compatibility
-
-| Script | macOS | Linux | Cloudways |
-|--------|-------|-------|-----------|
-| `backup/export.sh` | ✅ | ✅ | ✅ |
-| `backup/import.sh` | ✅ | ✅ | ✅ |
-| `deploy/build-and-restart.sh` | ❌ | ✅ | ✅ |
-| `pm2/pm2-manager.sh` | ✅ | ✅ | ✅ |
-| `setup/generate-env-keys.sh` | ✅ | ✅ | ✅ |
-| `setup/setup-env-keys.sh` | ✅ | ✅ | ✅ |
-| `cloudways/sync-to-cloudways.sh` | ✅ | ✅ | ✅ |
-| `cloudways/fix-permissions.sh` | ❌ | ❌ | ✅ |
-| `cloudways/check-ports.sh` | ❌ | ✅ | ✅ |
-
----
-
-## Workflow Examples
-
-See [WORKFLOW_EXAMPLES.md](./WORKFLOW_EXAMPLES.md) for detailed step-by-step guides on:
-
-1. Migrating data from legacy server to Cloudways
-2. Local development with production data
-3. Uploading local changes to Cloudways
-4. Upgrading Strapi version
-5. Emergency rollback
-
----
-
-## Configuration
-
-### No Configuration Needed!
-
-Most scripts work **atomically** - just run them with the required parameters. No setup files or profiles needed.
-
-### Optional: Add to PATH
-
-For easier access, add to your shell profile:
+### 6. Generate Security Keys
 
 ```bash
-# Add to ~/.bashrc or ~/.zshrc
-export PATH="$HOME/.strapi-toolkit/scripts:$PATH"
-
-# Then you can run scripts directly
-backup/export.sh
-pm2/pm2-manager.sh status
+# Generate all Strapi security keys
+bash strapi-toolkit/setup/generate-env-keys.sh
 ```
 
 ---
 
-## Requirements
+## 🌍 Environment Compatibility
+
+| Script | macOS | Linux | Cloudways | Notes |
+|--------|-------|-------|-----------|-------|
+| `backup/export.sh` | ✅ | ✅ | ✅ | Universal |
+| `backup/import.sh` | ✅ | ✅ | ✅ | Universal |
+| `deploy/build-and-restart.sh` | ⚠️ | ✅ | ✅ | Requires PM2 |
+| `pm2/pm2-manager.sh` | ✅ | ✅ | ✅ | Universal (if PM2 installed) |
+| `setup/generate-env-keys.sh` | ✅ | ✅ | ✅ | Universal |
+| `setup/setup-env-keys.sh` | ✅ | ✅ | ✅ | Universal |
+| `cloudways/sync-to-cloudways.sh` | ✅ | ✅ | ✅ | Universal (requires rsync) |
+| `cloudways/fix-permissions.sh` | ❌ | ❌ | ✅ | Cloudways only |
+| `cloudways/check-ports.sh` | ⚠️ | ✅ | ✅ | Linux/Cloudways |
+
+**Legend:** ✅ Fully supported | ⚠️ Partial support | ❌ Not applicable
+
+---
+
+## 📖 Complete Workflows
+
+See **[WORKFLOW_EXAMPLES.md](./WORKFLOW_EXAMPLES.md)** for detailed step-by-step guides:
+
+1. **Migrate production data to local development**
+2. **Deploy code updates to Cloudways**
+3. **Fresh Strapi setup on new server**
+4. **Upload local changes without git**
+5. **Emergency rollback procedure**
+
+---
+
+## ⚙️ Design Principles
+
+1. **Atomic Execution** - Each script runs independently without saved state
+2. **Environment Agnostic** - Auto-detects macOS, Linux, and Cloudways environments
+3. **Interactive by Default** - Prompts for missing parameters (no trial-and-error)
+4. **Single Responsibility** - Each script does one thing well
+5. **Multi-tenant Compatible** - Works in Cloudways' restricted environment
+
+### Environment Auto-Detection
+
+All scripts automatically detect:
+- **NVM location** - `$HOME/.nvm` or `/home/master/.nvm` (Cloudways)
+- **Node version** - Reads from `.nvmrc` file
+- **PM2 config** - Supports both `.js` and `.cjs` formats
+- **Operating system** - Adapts to macOS and Linux differences
+
+---
+
+## 🔧 System Requirements
 
 ### All Environments
 - Bash 4.0+
+- Git (for installation only)
 - Node.js (for Strapi operations)
-- Git (for installer only)
 
-### For Deployment
-- NVM (Node Version Manager)
-- PM2 (Process Manager)
+### For Deployment Scripts
+- NVM (Node Version Manager) - Recommended
+- PM2 (Process Manager for Node.js)
+- `.nvmrc` file in project root (optional)
 
 ### For File Transfer
 - rsync (pre-installed on most systems)
 - SSH access to target server
+- SSH key authentication configured
 
 ---
 
-## Architecture
-
-### Design Principles
-
-1. **Atomic Execution**: Each script runs independently
-2. **No State**: No configuration files to manage
-3. **Universal**: Works across different environments
-4. **Interactive**: Falls back to prompts if parameters missing
-5. **Single Responsibility**: Each script does one thing well
-
-### Environment Detection
-
-Scripts automatically detect:
-- Operating system (macOS, Linux)
-- NVM location (`$HOME/.nvm` or `/home/master/.nvm`)
-- Node version (from `.nvmrc`)
-- PM2 configuration file (`.js` or `.cjs`)
-
----
-
-## Troubleshooting
+## 🚨 Troubleshooting
 
 ### Script Not Found
-
 ```bash
-# Make sure scripts are executable
-chmod +x scripts/**/*.sh
+# Make scripts executable
+chmod +x strapi-toolkit/**/*.sh
 ```
 
 ### NVM Not Found
-
 ```bash
 # Install NVM
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-
-# Reload shell
 source ~/.bashrc
 ```
 
-### rsync: command not found (macOS)
+### Permission Denied (Cloudways)
+```bash
+# Fix file permissions
+bash strapi-toolkit/cloudways/fix-permissions.sh
+```
 
+### Port Already in Use
+```bash
+# Check what's using ports
+bash strapi-toolkit/cloudways/check-ports.sh
+
+# Stop conflicting process
+bash strapi-toolkit/pm2/pm2-manager.sh stop
+```
+
+### rsync Not Found (macOS)
 ```bash
 # Install modern rsync
 brew install rsync
 ```
 
-### Permission Denied (Cloudways)
+**More troubleshooting?** See **[FEATURES.md](./FEATURES.md#troubleshooting)** for comprehensive solutions.
+
+---
+
+## 📝 Example: Complete Deployment Workflow
 
 ```bash
-# Fix permissions
-bash scripts/cloudways/fix-permissions.sh
+# 1. On local - Export data (safety backup)
+bash strapi-toolkit/backup/export.sh --output ./backups
+
+# 2. Upload backup to Cloudways
+bash strapi-toolkit/cloudways/sync-to-cloudways.sh \
+  ./backups/strapi-backup-*.tar.gz \
+  --target user@host \
+  --port 22000 \
+  --dest backups/
+
+# 3. On local - Commit and push code
+git add .
+git commit -m "Update feature X"
+git push origin main
+
+# 4. On Cloudways - Pull and deploy
+cd ~/public_html
+git pull origin main
+bash strapi-toolkit/deploy/build-and-restart.sh
+
+# 5. Verify deployment
+bash strapi-toolkit/pm2/pm2-manager.sh status
+bash strapi-toolkit/pm2/pm2-manager.sh logs 50
 ```
 
 ---
 
-## Contributing
+## 🎓 Getting Help
 
-This toolkit is designed for internal use but can be shared. If you find bugs or want to add features:
+### Quick Reference
+- Run any script with `--help` for usage information
+- Check **[FEATURES.md](./FEATURES.md)** for detailed feature documentation
+- Review **[WORKFLOW_EXAMPLES.md](./WORKFLOW_EXAMPLES.md)** for step-by-step guides
 
-1. Test on your local environment first
-2. Test on a staging server
-3. Document any new features in README and WORKFLOW_EXAMPLES
-4. Commit with clear messages
+### Key Sections in FEATURES.md
+- Backup & Restore - Complete guide to data operations
+- Deployment - Build and deployment workflows
+- Process Management - PM2 operations
+- Environment Setup - Security key generation
+- Cloudways Utilities - File uploads and permissions
+- Architecture Diagrams - Visual workflow explanations
+- Common Workflows - Real-world usage scenarios
+- FAQ - Frequently asked questions
+
+### Reporting Issues
+- GitHub Issues: `https://github.com/orange-soft/cw-strapi-toolkit/issues`
+- Include: Script name, error message, environment details (macOS/Linux/Cloudways)
 
 ---
 
-## License
+## 🤝 Contributing
+
+This toolkit is designed for team use. To add features:
+
+1. Test on multiple environments (local, Linux server, Cloudways)
+2. Follow existing patterns (atomic, interactive, auto-detection)
+3. Update all documentation (README, FEATURES, WORKFLOW_EXAMPLES)
+4. Commit with clear messages
+
+See **[FEATURES.md#extending-the-toolkit](./FEATURES.md#extending-the-toolkit)** for detailed guidelines.
+
+---
+
+## 📄 License
 
 Internal use for Strapi project management. Modify as needed for your team.
 
 ---
 
-## Support
+## 🏆 Key Features Highlights
 
-For questions or issues:
-- Check WORKFLOW_EXAMPLES.md for common scenarios
-- Review script help: `bash script-name.sh --help`
-- Contact the development team
+- ✅ **Zero Configuration** - No config files or profiles needed
+- ✅ **Interactive Mode** - Prompts for missing parameters
+- ✅ **Tab Completion** - Supports shell autocomplete for file paths
+- ✅ **Environment Detection** - Works everywhere automatically
+- ✅ **Safety First** - Backs up before destructive operations
+- ✅ **Cloudways Compatible** - Designed for multi-tenant restrictions
+- ✅ **Comprehensive Docs** - Every feature fully documented
+
+---
+
+**Version:** 1.0.0
+**Last Updated:** October 2024
+**Compatibility:** Strapi v4+
+
+For detailed feature documentation, see **[FEATURES.md](./FEATURES.md)**

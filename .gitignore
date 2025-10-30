@@ -17,6 +17,10 @@ Thumbs.db
 .env
 .env.local
 
+CLAUDE.md
+.claude
+
+
 
 # Created by https://www.toptal.com/developers/gitignore/api/macos,linux,windows,jetbrains+all,visualstudiocode,sublimetext,strapi,node,nuxtjs,laravel
 # Edit at https://www.toptal.com/developers/gitignore?templates=macos,linux,windows,jetbrains+all,visualstudiocode,sublimetext,strapi,node,nuxtjs,laravel
