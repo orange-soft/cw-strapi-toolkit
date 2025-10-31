@@ -27,6 +27,8 @@ API_TOKEN_SALT=$(generate_key)
 ADMIN_JWT_SECRET=$(generate_key)
 TRANSFER_TOKEN_SALT=$(generate_key)
 JWT_SECRET=$(generate_key)
+ENCRYPTION_KEY=$(generate_key)
+ADMIN_ENCRYPTION_KEY=$(generate_key)
 
 echo "✅ Keys generated successfully!"
 echo ""
@@ -39,6 +41,8 @@ echo "API_TOKEN_SALT=${API_TOKEN_SALT}"
 echo "ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET}"
 echo "TRANSFER_TOKEN_SALT=${TRANSFER_TOKEN_SALT}"
 echo "JWT_SECRET=${JWT_SECRET}"
+echo "ENCRYPTION_KEY=${ENCRYPTION_KEY}"
+echo "ADMIN_ENCRYPTION_KEY=${ADMIN_ENCRYPTION_KEY}"
 echo ""
 echo "========================================"
 echo ""

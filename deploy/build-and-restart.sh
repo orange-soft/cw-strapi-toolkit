@@ -110,9 +110,10 @@ echo "   NPM Cache: ${NPM_CONFIG_CACHE}"
 echo ""
 echo "🔧 Checking app directory permissions..."
 
-# Use marker file approach instead of checking actual permissions
-# Reason: App user may not have permission to set setgid bit, causing false negatives
-PERMS_MARKER="${APP_ROOT}/.permissions-initialized"
+# Use marker file in parent directory (public_html/) not app directory
+# Reason: Files in app directory may be removed during deployment (git clean, etc.)
+APP_NAME="$(basename "${APP_ROOT}")"
+PERMS_MARKER="${HOME}/.permissions-initialized-${APP_NAME}"
 
 if [ -f "$PERMS_MARKER" ]; then
     echo "✅ App permissions already initialized (skipping)"
@@ -123,10 +124,11 @@ else
     if [ -f "${APP_ROOT}/strapi-toolkit/cloudways/init-app-permissions.sh" ]; then
         bash "${APP_ROOT}/strapi-toolkit/cloudways/init-app-permissions.sh"
 
-        # Create marker file to prevent running again
+        # Create marker file in parent directory to prevent running again
         touch "$PERMS_MARKER" 2>/dev/null || true
         echo ""
         echo "✅ Permissions initialized - future deployments will skip this step"
+        echo "   Marker file: $PERMS_MARKER"
     else
         echo "⚠️  Warning: init-app-permissions.sh not found in toolkit"
         echo "   Permissions may cause issues. Consider running manually:"

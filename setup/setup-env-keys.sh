@@ -32,6 +32,8 @@ API_TOKEN_SALT=$(generate_key)
 ADMIN_JWT_SECRET=$(generate_key)
 TRANSFER_TOKEN_SALT=$(generate_key)
 JWT_SECRET=$(generate_key)
+ENCRYPTION_KEY=$(generate_key)
+ADMIN_ENCRYPTION_KEY=$(generate_key)
 
 echo "✅ Keys generated successfully!"
 echo ""
@@ -44,6 +46,8 @@ echo "API_TOKEN_SALT=${API_TOKEN_SALT}"
 echo "ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET}"
 echo "TRANSFER_TOKEN_SALT=${TRANSFER_TOKEN_SALT}"
 echo "JWT_SECRET=${JWT_SECRET}"
+echo "ENCRYPTION_KEY=${ENCRYPTION_KEY}"
+echo "ADMIN_ENCRYPTION_KEY=${ADMIN_ENCRYPTION_KEY}"
 echo ""
 echo "========================================"
 echo ""
@@ -67,6 +71,10 @@ if [ -f "$ENV_FILE" ]; then
         # Create temporary file
         TMP_FILE=$(mktemp)
 
+        # Track which keys were found in the file
+        FOUND_ENCRYPTION_KEY=false
+        FOUND_ADMIN_ENCRYPTION_KEY=false
+
         # Update the keys in the .env file
         while IFS= read -r line; do
             if [[ $line =~ ^APP_KEYS= ]]; then
@@ -79,10 +87,27 @@ if [ -f "$ENV_FILE" ]; then
                 echo "TRANSFER_TOKEN_SALT=${TRANSFER_TOKEN_SALT}"
             elif [[ $line =~ ^JWT_SECRET= ]]; then
                 echo "JWT_SECRET=${JWT_SECRET}"
+            elif [[ $line =~ ^ENCRYPTION_KEY= ]]; then
+                echo "ENCRYPTION_KEY=${ENCRYPTION_KEY}"
+                FOUND_ENCRYPTION_KEY=true
+            elif [[ $line =~ ^ADMIN_ENCRYPTION_KEY= ]]; then
+                echo "ADMIN_ENCRYPTION_KEY=${ADMIN_ENCRYPTION_KEY}"
+                FOUND_ADMIN_ENCRYPTION_KEY=true
             else
                 echo "$line"
             fi
         done < "$ENV_FILE" > "$TMP_FILE"
+
+        # Append missing keys at the end if they weren't found
+        if [ "$FOUND_ENCRYPTION_KEY" = false ]; then
+            echo "ENCRYPTION_KEY=${ENCRYPTION_KEY}" >> "$TMP_FILE"
+            echo "   ➕ Added ENCRYPTION_KEY (was missing)"
+        fi
+
+        if [ "$FOUND_ADMIN_ENCRYPTION_KEY" = false ]; then
+            echo "ADMIN_ENCRYPTION_KEY=${ADMIN_ENCRYPTION_KEY}" >> "$TMP_FILE"
+            echo "   ➕ Added ADMIN_ENCRYPTION_KEY (was missing)"
+        fi
 
         # Replace original file
         mv "$TMP_FILE" "$ENV_FILE"
