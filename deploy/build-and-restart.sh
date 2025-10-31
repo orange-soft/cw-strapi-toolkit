@@ -110,41 +110,29 @@ echo "   NPM Cache: ${NPM_CONFIG_CACHE}"
 echo ""
 echo "🔧 Checking app directory permissions..."
 
-# Check if app root has correct permissions (775 with www-data group and setgid bit)
-APP_ROOT_PERMS=$(stat -c "%a" "${APP_ROOT}" 2>/dev/null || stat -f "%Lp" "${APP_ROOT}" 2>/dev/null)
-APP_ROOT_GROUP=$(stat -c "%G" "${APP_ROOT}" 2>/dev/null || stat -f "%Sg" "${APP_ROOT}" 2>/dev/null)
-APP_ROOT_SETGID=$(stat -c "%A" "${APP_ROOT}" 2>/dev/null | grep -q 's' && echo "yes" || echo "no")
-# Linux fallback for setgid check
-if [ "$APP_ROOT_SETGID" = "no" ]; then
-    APP_ROOT_SETGID=$(ls -ld "${APP_ROOT}" | awk '{print $1}' | grep -q 's' && echo "yes" || echo "no")
-fi
+# Use marker file approach instead of checking actual permissions
+# Reason: App user may not have permission to set setgid bit, causing false negatives
+PERMS_MARKER="${APP_ROOT}/.permissions-initialized"
 
-# Permissions are correct if: 2775 or 775, group is www-data, and setgid bit is set
-PERMS_OK="no"
-if ([ "$APP_ROOT_PERMS" = "2775" ] || [ "$APP_ROOT_PERMS" = "775" ]) && \
-   [ "$APP_ROOT_GROUP" = "www-data" ] && \
-   [ "$APP_ROOT_SETGID" = "yes" ]; then
-    PERMS_OK="yes"
-fi
-
-if [ "$PERMS_OK" = "yes" ]; then
-    echo "✅ App directory permissions already correct (775, www-data, setgid)"
+if [ -f "$PERMS_MARKER" ]; then
+    echo "✅ App permissions already initialized (skipping)"
 else
-    echo "⚠️  App directory permissions need fixing"
-    echo "   Current: ${APP_ROOT_PERMS} (group: ${APP_ROOT_GROUP}, setgid: ${APP_ROOT_SETGID})"
-    echo "   Expected: 2775 or 775 (group: www-data, setgid: yes)"
+    echo "⚠️  First deployment detected - initializing permissions..."
     echo ""
 
     if [ -f "${APP_ROOT}/strapi-toolkit/cloudways/init-app-permissions.sh" ]; then
-        echo "🔧 Running init-app-permissions.sh to fix permissions..."
         bash "${APP_ROOT}/strapi-toolkit/cloudways/init-app-permissions.sh"
+
+        # Create marker file to prevent running again
+        touch "$PERMS_MARKER" 2>/dev/null || true
         echo ""
+        echo "✅ Permissions initialized - future deployments will skip this step"
     else
         echo "⚠️  Warning: init-app-permissions.sh not found in toolkit"
         echo "   Permissions may cause issues. Consider running manually:"
         echo "   bash strapi-toolkit/cloudways/init-app-permissions.sh"
-        echo ""
     fi
+    echo ""
 fi
 
 echo ""
