@@ -89,12 +89,18 @@ export PM2_HOME="${MASTER_HOME}/.pm2"
 # Set npm cache explicitly to master's location (accessible to www-data group)
 export NPM_CONFIG_CACHE="${MASTER_HOME}/.npm"
 
-# Note: We do NOT override HOME here - each app needs its own $HOME/.config/com.strapi/config.json
-# which contains a unique UUID per Strapi app (must not be shared across apps)
+# Override HOME to public_html (parent of APP_ROOT) because:
+# - App user's $HOME (/home/master/applications/appuser1/) is owned by root
+# - public_html/ is the effective home for app user (writable)
+# - Project is at public_html/gocomm-strapi/ (APP_ROOT)
+# - Strapi creates $HOME/.config/com.strapi/config.json (unique UUID per app user)
+# - .config should be at public_html level (shared by all projects under same app user)
+export HOME="$(dirname "${APP_ROOT}")"
 
 echo ""
 echo "🔍 Environment Info:"
 echo "   Working Directory: ${APP_ROOT}"
+echo "   HOME Override: ${HOME}"
 echo "   Node Version: $(node --version)"
 echo "   NPM Version: $(npm --version)"
 echo "   PM2 Path: $(which pm2)"
