@@ -124,29 +124,6 @@ else
     PARENT_DIR="$(dirname "$SCRIPT_DIR")"
     TOOLKIT_NAME="$(basename "$SCRIPT_DIR")"
 
-    # Check if toolkit is tracked by git (if parent is a git repo)
-    IS_GIT_TRACKED=false
-    if git -C "$PARENT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-        # Check if any files in strapi-toolkit are tracked
-        if git -C "$PARENT_DIR" ls-files --error-unmatch "$TOOLKIT_NAME" >/dev/null 2>&1; then
-            IS_GIT_TRACKED=true
-        fi
-    fi
-
-    # Only create backup if NOT tracked by git
-    BACKUP_DIR=""
-    if [ "$IS_GIT_TRACKED" = true ]; then
-        echo ""
-        echo "ℹ️  Toolkit is tracked by git - no backup needed"
-        echo "   (You can rollback using git if needed)"
-    else
-        echo ""
-        echo "📦 Creating backup (not tracked by git)..."
-        BACKUP_DIR="${SCRIPT_DIR}.backup.$(date +%s)"
-        cp -r "$SCRIPT_DIR" "$BACKUP_DIR"
-        echo "✅ Backup created: $BACKUP_DIR"
-    fi
-
     echo ""
     echo "🗑️  Removing old version..."
     rm -rf "$SCRIPT_DIR"
@@ -160,12 +137,6 @@ else
 
     echo ""
     echo "✅ Update complete!"
-
-    if [ -n "$BACKUP_DIR" ]; then
-        echo ""
-        echo "📁 Backup available at: $BACKUP_DIR"
-        echo "   (You can delete it if everything works fine)"
-    fi
 fi
 
 echo ""
