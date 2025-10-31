@@ -523,37 +523,77 @@ If your Cloudways uses the default SSH port 22, you don't need to set `CLOUDWAYS
 
 ---
 
-### `cloudways/fix-permissions.sh`
+### `cloudways/fix-master-permissions.sh`
 
-**Purpose:** Fix file permissions for Cloudways environment
+**Purpose:** Fix shared resource permissions in `/home/master/` directory (ONE-TIME SETUP)
 
 **Key Features:**
-- Sets correct ownership for app user
-- Fixes directory permissions (755)
-- Fixes file permissions (644)
-- Makes specific scripts executable
+- Fixes `.npm` cache directory (group write needed for npm ci)
+- Fixes `.pm2` directory (group write needed for pm2 save)
+- Fixes `.config` directory (group write needed for Strapi build)
+- Ensures `www-data` group has write access to shared resources
+- Creates directories if they don't exist
 
 **Usage:**
 
 ```bash
-# Run from app root directory on Cloudways server
-bash strapi-toolkit/cloudways/fix-permissions.sh
+# Run ONCE as master user to fix shared resources
+sudo -u master bash strapi-toolkit/cloudways/fix-master-permissions.sh
 ```
 
 **What It Fixes:**
-- Directory permissions: `755` (rwxr-xr-x)
-- File permissions: `644` (rw-r--r--)
-- Script files: `755` (executable)
-- Ownership: App user and group
+- `/home/master/.npm` → `775` (drwxrwxr-x) with www-data group
+- `/home/master/.pm2` → `775` (drwxrwxr-x) with www-data group
+- `/home/master/.config` → `775` (drwxrwxr-x) with www-data group
 
 **When to Use:**
-- After uploading files via rsync/SFTP
-- After git pull operations
-- When encountering permission errors
-- After extracting archives
+- **ONCE per Cloudways server** when setting up the first Strapi app
+- When you see permission errors related to npm cache, PM2, or Strapi config
+- After master user environment changes
 
-**Cloudways Specific:**
-Only works on Cloudways servers where the app user has proper permissions. Not applicable for local development or other hosting environments.
+**Why This Matters:**
+On Cloudways multi-tenant servers, all apps share `/home/master/` for NVM, npm cache, and PM2. The default permissions may prevent app users (in www-data group) from writing to these shared directories.
+
+---
+
+### `cloudways/init-app-permissions.sh`
+
+**Purpose:** Initialize permissions for a new app directory (ONE-TIME PER APP)
+
+**Key Features:**
+- Sets app directory to `775` with www-data group
+- Recursively fixes all files (664) and directories (775)
+- Sets setgid bit (`g+s`) so new files inherit www-data group
+- Creates standard directories (.cache, .strapi, .tmp, node_modules)
+- Fast operation on empty directories (run BEFORE first deployment)
+
+**Usage:**
+
+```bash
+# Run ONCE per app, BEFORE first deployment
+cd ~/public_html/your-app
+bash strapi-toolkit/cloudways/init-app-permissions.sh
+```
+
+**What It Fixes:**
+- App root: `775` (drwxrwxr-x) + setgid bit
+- All directories: `775` (drwxrwxr-x) + setgid bit
+- All files: `664` (rw-rw-r--)
+- Group: www-data on everything
+
+**When to Use:**
+- **ONCE per app** immediately after Cloudways creates the app directory
+- BEFORE running your first deployment
+- When you clone a new app from git
+
+**Why This Matters:**
+Cloudways creates `public_html/app-name` with potentially restrictive permissions. Running this script early (when the directory is mostly empty) ensures:
+1. Fast execution (seconds, not minutes)
+2. All future files inherit correct permissions via setgid bit
+3. No permission errors during npm ci or PM2 operations
+
+**Performance Note:**
+Running this on a directory with thousands of files (after deployment) takes a long time. Always run BEFORE first deployment when the directory is empty or has minimal files.
 
 ---
 

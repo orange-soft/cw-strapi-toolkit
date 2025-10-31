@@ -108,13 +108,74 @@ echo "   PM2 Home: ${PM2_HOME}"
 echo "   NPM Cache: ${NPM_CONFIG_CACHE}"
 
 echo ""
+echo "🔧 Checking app directory permissions..."
+
+# Check if app root has correct permissions (775 with www-data group and setgid bit)
+APP_ROOT_PERMS=$(stat -c "%a" "${APP_ROOT}" 2>/dev/null || stat -f "%Lp" "${APP_ROOT}" 2>/dev/null)
+APP_ROOT_GROUP=$(stat -c "%G" "${APP_ROOT}" 2>/dev/null || stat -f "%Sg" "${APP_ROOT}" 2>/dev/null)
+APP_ROOT_SETGID=$(stat -c "%A" "${APP_ROOT}" 2>/dev/null | grep -q 's' && echo "yes" || echo "no")
+# Linux fallback for setgid check
+if [ "$APP_ROOT_SETGID" = "no" ]; then
+    APP_ROOT_SETGID=$(ls -ld "${APP_ROOT}" | awk '{print $1}' | grep -q 's' && echo "yes" || echo "no")
+fi
+
+# Permissions are correct if: 2775 or 775, group is www-data, and setgid bit is set
+PERMS_OK="no"
+if ([ "$APP_ROOT_PERMS" = "2775" ] || [ "$APP_ROOT_PERMS" = "775" ]) && \
+   [ "$APP_ROOT_GROUP" = "www-data" ] && \
+   [ "$APP_ROOT_SETGID" = "yes" ]; then
+    PERMS_OK="yes"
+fi
+
+if [ "$PERMS_OK" = "yes" ]; then
+    echo "✅ App directory permissions already correct (775, www-data, setgid)"
+else
+    echo "⚠️  App directory permissions need fixing"
+    echo "   Current: ${APP_ROOT_PERMS} (group: ${APP_ROOT_GROUP}, setgid: ${APP_ROOT_SETGID})"
+    echo "   Expected: 2775 or 775 (group: www-data, setgid: yes)"
+    echo ""
+
+    if [ -f "${APP_ROOT}/strapi-toolkit/cloudways/init-app-permissions.sh" ]; then
+        echo "🔧 Running init-app-permissions.sh to fix permissions..."
+        bash "${APP_ROOT}/strapi-toolkit/cloudways/init-app-permissions.sh"
+        echo ""
+    else
+        echo "⚠️  Warning: init-app-permissions.sh not found in toolkit"
+        echo "   Permissions may cause issues. Consider running manually:"
+        echo "   bash strapi-toolkit/cloudways/init-app-permissions.sh"
+        echo ""
+    fi
+fi
+
+echo ""
 echo "📦 Installing production dependencies..."
 
 # Clean node_modules to prevent ENOTEMPTY errors from stale state
 if [ -d "${APP_ROOT}/node_modules" ]; then
     echo "🧹 Removing existing node_modules for clean install..."
-    rm -rf "${APP_ROOT}/node_modules"
-    echo "✅ node_modules removed"
+
+    # Try to remove with force, suppressing errors initially
+    rm -rf "${APP_ROOT}/node_modules" 2>/dev/null || true
+
+    # Check if removal was successful
+    if [ -d "${APP_ROOT}/node_modules" ]; then
+        echo "⚠️  Warning: Some directories could not be removed"
+        echo "   Trying with group write permissions fix..."
+
+        # Fix group permissions (www-data group needs write access)
+        chmod -R g+w "${APP_ROOT}/node_modules" 2>/dev/null || true
+        rm -rf "${APP_ROOT}/node_modules" 2>/dev/null || true
+
+        if [ -d "${APP_ROOT}/node_modules" ]; then
+            echo "❌ Error: Failed to fully remove node_modules"
+            echo "   npm ci may fail with ENOTEMPTY errors"
+            echo "   This may require manual cleanup or fix-permissions.sh"
+        else
+            echo "✅ node_modules removed (after permission fix)"
+        fi
+    else
+        echo "✅ node_modules removed"
+    fi
 fi
 
 INSTALL_START=$(date +%s)
@@ -138,6 +199,9 @@ if [ "$CURRENT_PERMS" != "644" ] && [ "$CURRENT_PERMS" != "664" ]; then
 else
     echo "✅ .env permissions correct ($CURRENT_PERMS)"
 fi
+
+# Set umask to ensure group write permissions (002 = rwxrwxr-x for directories)
+umask 002
 
 # Clean install with production dependencies only
 if npm ci --omit=dev --loglevel=error; then
