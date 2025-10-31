@@ -28,14 +28,10 @@ A comprehensive collection of battle-tested DevOps scripts for managing Strapi a
 ## Quick Install
 
 ```bash
-# Navigate to your app directory (important for Cloudways!)
-cd ~/public_html
-
-# Install toolkit to current directory
 curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/master/install.sh | bash
-
-# This creates: ./strapi-toolkit/
 ```
+
+**Important:** Run this from your app directory (e.g., `~/public_html` on Cloudways). This creates `./strapi-toolkit/` in the current directory.
 
 ### Why Current Directory?
 
