@@ -276,13 +276,12 @@ bash strapi-toolkit/backup/import.sh --file ./strapi-backup-20241030-153045.tar.
 1. Load NVM and correct Node version
 2. Install dependencies (`npm ci`) - **App still running**
 3. Build Strapi admin panel (`npm run build`) - **App still running**
-4. Stop PM2 process - **Only stop after successful build**
-5. Start PM2 with new build - **Minimal downtime (~2s)**
-6. Verify application is running
+4. Restart PM2 with new build - **Only restart after successful build**
+5. Verify application is running
 
 **Downtime:**
 - Previous approach: ~60-120s (entire build time)
-- **New approach: ~2-5s (just stop + start time)**
+- **New approach: ~2-5s (just PM2 graceful restart time)** ✅
 
 **Usage:**
 

@@ -157,21 +157,17 @@ echo "   node_modules: $(du -sh "${APP_ROOT}"/node_modules 2>/dev/null | cut -f1
 echo "   Build Output: $(du -sh "${APP_ROOT}"/dist 2>/dev/null | cut -f1 || du -sh "${APP_ROOT}"/build 2>/dev/null | cut -f1 || echo 'N/A')"
 
 echo ""
-echo "🛑 Stopping PM2 process..."
-# Stop only after successful build to minimize downtime
-bash "${APP_ROOT}"/strapi-toolkit/pm2/pm2-manager.sh stop || true
-
-echo ""
-echo "♻️  Starting PM2 process with new build..."
+echo "♻️  Restarting PM2 with new build..."
+# Restart only after successful build to minimize downtime
 RESTART_START=$(date +%s)
 
-if bash "${APP_ROOT}"/strapi-toolkit/pm2/pm2-manager.sh start; then
+if bash "${APP_ROOT}"/strapi-toolkit/pm2/pm2-manager.sh restart; then
     RESTART_END=$(date +%s)
     RESTART_DURATION=$((RESTART_END - RESTART_START))
-    echo "✅ PM2 started in ${RESTART_DURATION}s"
-    echo "   Downtime: ~${RESTART_DURATION}s (stop + start only)"
+    echo "✅ PM2 restarted in ${RESTART_DURATION}s"
+    echo "   Downtime: ~${RESTART_DURATION}s (graceful reload)"
 else
-    echo "❌ Error: PM2 start failed"
+    echo "❌ Error: PM2 restart failed"
     exit 1
 fi
 
