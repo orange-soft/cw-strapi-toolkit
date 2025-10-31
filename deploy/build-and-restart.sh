@@ -109,6 +109,14 @@ echo "   NPM Cache: ${NPM_CONFIG_CACHE}"
 
 echo ""
 echo "📦 Installing production dependencies..."
+
+# Clean node_modules to prevent ENOTEMPTY errors from stale state
+if [ -d "${APP_ROOT}/node_modules" ]; then
+    echo "🧹 Removing existing node_modules for clean install..."
+    rm -rf "${APP_ROOT}/node_modules"
+    echo "✅ node_modules removed"
+fi
+
 INSTALL_START=$(date +%s)
 
 # Verify .env file exists and has correct permissions

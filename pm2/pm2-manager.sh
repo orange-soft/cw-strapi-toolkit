@@ -84,7 +84,16 @@ case $COMMAND in
         # Try graceful restart first
         if pm2 restart ${ECOSYSTEM_CONFIG} 2>/dev/null; then
             pm2 save --force
-            echo "✅ PM2 process restarted"
+
+            # Verify app is actually running after restart
+            sleep 2
+            if [ -n "$APP_NAME" ] && pm2 list | grep -q "$APP_NAME.*online"; then
+                echo "✅ PM2 process restarted and running"
+            else
+                echo "❌ Error: PM2 restart succeeded but app is not online"
+                echo "   Run 'bash $0 logs' to see error details"
+                exit 1
+            fi
         else
             # If restart fails (process not found), try delete + start for this app only
             echo "🧹 Process not running, starting fresh..."
