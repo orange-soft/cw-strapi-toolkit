@@ -123,25 +123,35 @@ case $COMMAND in
         ;;
 
     status|list)
-        echo "📊 PM2 Status:"
+        echo "📊 PM2 Status (all processes on this server):"
         pm2 list
         echo ""
-        echo "💾 Memory & Uptime:"
-        pm2 info $(pm2 list | grep 'strapi' | awk '{print $2}' | head -1) | grep -E 'memory|uptime' || true
+
+        # Get app name from ecosystem config to show details for current app only
+        if command -v node &> /dev/null && [ -f "${ECOSYSTEM_CONFIG}" ]; then
+            APP_NAME=$(node -p "try { const config = require('./${ECOSYSTEM_CONFIG}'); config.apps?.[0]?.name || '' } catch(e) { '' }" 2>/dev/null)
+
+            if [ -n "$APP_NAME" ]; then
+                echo "💾 Memory & Uptime for '${APP_NAME}' (current app):"
+                pm2 info "$APP_NAME" 2>/dev/null | grep -E 'memory|uptime|cpu|status' || echo "   App not running"
+            fi
+        fi
         ;;
 
     logs)
         LINES=${2:-50}
 
-        # Get the app name from PM2 list (using the ecosystem config)
-        APP_NAME=$(pm2 jlist | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4)
+        # Get app name from ecosystem config (not from pm2 list, which could match other apps)
+        if command -v node &> /dev/null && [ -f "${ECOSYSTEM_CONFIG}" ]; then
+            APP_NAME=$(node -p "try { const config = require('./${ECOSYSTEM_CONFIG}'); config.apps?.[0]?.name || '' } catch(e) { '' }" 2>/dev/null)
+        fi
 
         if [ -n "$APP_NAME" ]; then
             echo "📝 PM2 Logs for '${APP_NAME}' (last ${LINES} lines):"
             pm2 logs "$APP_NAME" --lines ${LINES} --nostream
         else
-            echo "📝 PM2 Logs (last ${LINES} lines):"
-            echo "⚠️  Could not detect app name, showing all processes:"
+            echo "⚠️  Could not detect app name from ${ECOSYSTEM_CONFIG}"
+            echo "   Showing all logs (may include other apps on this server):"
             pm2 logs --lines ${LINES} --nostream
         fi
         ;;
@@ -154,12 +164,12 @@ case $COMMAND in
         echo "  stop     - Stop PM2 process for current app"
         echo "  restart  - Restart PM2 process for current app (graceful)"
         echo "  delete   - Delete PM2 process for current app"
-        echo "  cleanup  - ⚠️  DANGEROUS: Delete ALL PM2 processes on server (with confirmation)"
-        echo "  status   - Show PM2 status (all processes)"
+        echo "  cleanup  - ⚠️  DANGEROUS: Delete ALL PM2 processes on server (requires confirmation)"
+        echo "  status   - Show PM2 status (all processes on server)"
         echo "  logs [N] - Show PM2 logs for current app only (default: 50 lines)"
         echo ""
         echo "Examples:"
-        echo "  $0 restart     # Safely restart current app only"
+        echo "  $0 restart     # Restart current app only"
         echo "  $0 status      # Check all PM2 processes"
         echo "  $0 logs        # Show last 50 lines"
         echo "  $0 logs 100    # Show last 100 lines"

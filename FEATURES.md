@@ -288,14 +288,14 @@ bash strapi-toolkit/pm2/pm2-manager.sh start
 # Stop application
 bash strapi-toolkit/pm2/pm2-manager.sh stop
 
-# Restart application (with automatic cleanup)
+# Restart application (graceful)
 bash strapi-toolkit/pm2/pm2-manager.sh restart
-
-# Clean up PM2 (fixes "invalid PID" errors)
-bash strapi-toolkit/pm2/pm2-manager.sh cleanup
 
 # Delete from PM2 (complete removal)
 bash strapi-toolkit/pm2/pm2-manager.sh delete
+
+# Clean up PM2 (⚠️ affects ALL apps - requires confirmation)
+bash strapi-toolkit/pm2/pm2-manager.sh cleanup
 
 # View logs for current app only (last 50 lines by default)
 bash strapi-toolkit/pm2/pm2-manager.sh logs
@@ -836,17 +836,18 @@ PM2 | TypeError: One of the pids provided is invalid
 
 **Solution:**
 ```bash
-# Option 1: Automatic cleanup (recommended)
+# Option 1: Graceful restart (recommended - current app only)
 bash strapi-toolkit/pm2/pm2-manager.sh restart
-# This now includes automatic cleanup
 
-# Option 2: Manual cleanup
-bash strapi-toolkit/pm2/pm2-manager.sh cleanup
-# Then start your app
+# Option 2: Delete and start fresh (current app only)
+bash strapi-toolkit/pm2/pm2-manager.sh delete
 bash strapi-toolkit/pm2/pm2-manager.sh start
+
+# Option 3: Clean up all PM2 processes (⚠️ affects ALL apps - requires confirmation)
+bash strapi-toolkit/pm2/pm2-manager.sh cleanup
 ```
 
-**Prevention:** The `restart` command now automatically cleans up stale processes before starting fresh.
+**Prevention:** The `restart` command uses graceful restart which handles stale processes automatically.
 
 ### Issue: "Port already in use"
 
