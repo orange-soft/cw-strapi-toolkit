@@ -18,6 +18,7 @@ elif [ -s "/home/master/.nvm/nvm.sh" ]; then
     \. "$NVM_DIR/nvm.sh"
     # Setup Cloudways-specific paths
     export PATH="/home/master/bin:/home/master/bin/npm/lib/node_modules/bin:${PATH}"
+    export NPM_CONFIG_CACHE="/home/master/.npm"
 else
     echo "⚠️  Warning: NVM not found, using system Node/NPM"
 fi

@@ -8,40 +8,34 @@ set -o pipefail  # Exit on pipe failure
 # Usage: ./pm2-manager.sh [start|stop|restart|status|delete]
 # Note: Can be called directly or from other scripts (inherits parent environment)
 
+# Define paths (same as build-and-restart.sh)
+MASTER_HOME="/home/master"
 APP_ROOT="$(pwd)"
 
 # Only setup environment if not already configured by parent script
 # This allows the script to be called standalone or from build-and-restart.sh
 if [ -z "${NVM_DIR:-}" ] || ! command -v nvm &> /dev/null; then
-    # Standalone mode: Auto-detect NVM location
-    if [ -n "${NVM_DIR:-}" ] && [ -s "$NVM_DIR/nvm.sh" ]; then
-        # NVM_DIR already set and valid
+    # Standalone mode: Use Cloudways paths (same as build-and-restart.sh)
+    export NVM_DIR="${MASTER_HOME}/.nvm"
+
+    if [ -s "$NVM_DIR/nvm.sh" ]; then
         \. "$NVM_DIR/nvm.sh"
-    elif [ -s "$HOME/.nvm/nvm.sh" ]; then
-        # Standard location (macOS/Linux local)
-        export NVM_DIR="$HOME/.nvm"
-        \. "$NVM_DIR/nvm.sh"
-    elif [ -s "/home/master/.nvm/nvm.sh" ]; then
-        # Cloudways location
-        export NVM_DIR="/home/master/.nvm"
-        \. "$NVM_DIR/nvm.sh"
-        # Setup Cloudways-specific paths
-        export PATH="/home/master/bin:/home/master/bin/npm/lib/node_modules/bin:${PATH}"
-        export PM2_HOME="/home/master/.pm2"
     else
-        echo "⚠️  Warning: NVM not found, using system Node/NPM"
+        echo "❌ Error: NVM not found at $NVM_DIR/nvm.sh"
+        echo "   This script requires Node.js (installed via NVM on Cloudways)"
+        exit 1
     fi
 
-    # Use Node version from .nvmrc if present and NVM is loaded
-    if [ -f "${APP_ROOT}/.nvmrc" ] && command -v nvm &> /dev/null; then
+    # Use Node version from .nvmrc if present
+    if [ -f "${APP_ROOT}/.nvmrc" ]; then
         NODE_VERSION=$(cat "${APP_ROOT}"/.nvmrc | tr -d '[:space:]')
         nvm use "${NODE_VERSION}" 2>/dev/null || nvm install "${NODE_VERSION}"
     fi
-fi
 
-# Ensure PM2_HOME is set (use default if not set by parent or Cloudways detection)
-if [ -z "${PM2_HOME:-}" ]; then
-    export PM2_HOME="${HOME}/.pm2"
+    # Setup PM2 environment (same as build-and-restart.sh)
+    export PATH="${MASTER_HOME}/bin:${MASTER_HOME}/bin/npm/lib/node_modules/bin:${PATH}"
+    export PM2_HOME="${MASTER_HOME}/.pm2"
+    export NPM_CONFIG_CACHE="${MASTER_HOME}/.npm"
 fi
 
 # Detect ecosystem config file

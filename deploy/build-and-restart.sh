@@ -86,8 +86,11 @@ fi
 export PATH="${MASTER_HOME}/bin:${MASTER_HOME}/bin/npm/lib/node_modules/bin:${PATH}"
 export PM2_HOME="${MASTER_HOME}/.pm2"
 
-# Set HOME to master so npm uses master's ~/.npm cache (which is already accessible to www-data group)
-export HOME="${MASTER_HOME}"
+# Set npm cache explicitly to master's location (accessible to www-data group)
+export NPM_CONFIG_CACHE="${MASTER_HOME}/.npm"
+
+# Note: We do NOT override HOME here - each app needs its own $HOME/.config/com.strapi/config.json
+# which contains a unique UUID per Strapi app (must not be shared across apps)
 
 echo ""
 echo "🔍 Environment Info:"
@@ -96,7 +99,7 @@ echo "   Node Version: $(node --version)"
 echo "   NPM Version: $(npm --version)"
 echo "   PM2 Path: $(which pm2)"
 echo "   PM2 Home: ${PM2_HOME}"
-echo "   NPM Cache: ${HOME}/.npm"
+echo "   NPM Cache: ${NPM_CONFIG_CACHE}"
 
 echo ""
 echo "📦 Installing production dependencies..."
