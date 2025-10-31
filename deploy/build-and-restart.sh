@@ -129,12 +129,8 @@ else
 fi
 
 echo ""
-echo "🛑 Stopping PM2 process..."
-# Run stop command (ignore error if PM2 process is not running)
-bash "${APP_ROOT}"/strapi-toolkit/pm2/pm2-manager.sh stop || true
-
-echo ""
 echo "🏗️  Building Strapi admin panel..."
+echo "   (App remains running during build - zero downtime deployment)"
 BUILD_START=$(date +%s)
 
 # Ensure directories exist (permissions should be set by master user via fix-permissions.sh)
@@ -150,10 +146,7 @@ if NODE_ENV=production npm run build; then
     echo "✅ Build completed in ${BUILD_DURATION}s"
 else
     echo "❌ Error: Build failed"
-    if [ -n "$ECOSYSTEM_CONFIG" ]; then
-        echo "   Rolling back to previous PM2 state..."
-        pm2 restart "${ECOSYSTEM_CONFIG}" || true
-    fi
+    echo "   App continues running with old version (no downtime)"
     exit 1
 fi
 
@@ -164,15 +157,21 @@ echo "   node_modules: $(du -sh "${APP_ROOT}"/node_modules 2>/dev/null | cut -f1
 echo "   Build Output: $(du -sh "${APP_ROOT}"/dist 2>/dev/null | cut -f1 || du -sh "${APP_ROOT}"/build 2>/dev/null | cut -f1 || echo 'N/A')"
 
 echo ""
-echo "♻️  Restarting PM2 process..."
+echo "🛑 Stopping PM2 process..."
+# Stop only after successful build to minimize downtime
+bash "${APP_ROOT}"/strapi-toolkit/pm2/pm2-manager.sh stop || true
+
+echo ""
+echo "♻️  Starting PM2 process with new build..."
 RESTART_START=$(date +%s)
 
-if bash "${APP_ROOT}"/strapi-toolkit/pm2/pm2-manager.sh restart; then
+if bash "${APP_ROOT}"/strapi-toolkit/pm2/pm2-manager.sh start; then
     RESTART_END=$(date +%s)
     RESTART_DURATION=$((RESTART_END - RESTART_START))
-    echo "✅ PM2 restarted in ${RESTART_DURATION}s"
+    echo "✅ PM2 started in ${RESTART_DURATION}s"
+    echo "   Downtime: ~${RESTART_DURATION}s (stop + start only)"
 else
-    echo "❌ Error: PM2 restart failed"
+    echo "❌ Error: PM2 start failed"
     exit 1
 fi
 
