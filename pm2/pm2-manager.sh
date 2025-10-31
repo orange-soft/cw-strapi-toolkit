@@ -76,6 +76,11 @@ case $COMMAND in
     restart)
         echo "♻️  Restarting PM2 process..."
 
+        # Get app name from ecosystem config for verification
+        if command -v node &> /dev/null && [ -f "${ECOSYSTEM_CONFIG}" ]; then
+            APP_NAME=$(node -p "try { const config = require('./${ECOSYSTEM_CONFIG}'); config.apps?.[0]?.name || '' } catch(e) { '' }" 2>/dev/null)
+        fi
+
         # Try graceful restart first
         if pm2 restart ${ECOSYSTEM_CONFIG} 2>/dev/null; then
             pm2 save --force
@@ -87,9 +92,18 @@ case $COMMAND in
 
             if pm2 start ${ECOSYSTEM_CONFIG}; then
                 pm2 save --force
-                echo "✅ PM2 process started"
+
+                # Verify app is actually running (not just started and crashed)
+                sleep 2
+                if [ -n "$APP_NAME" ] && pm2 list | grep -q "$APP_NAME.*online"; then
+                    echo "✅ PM2 process started and running"
+                else
+                    echo "❌ Error: PM2 started but app is not online"
+                    echo "   Run 'bash $0 logs' to see error details"
+                    exit 1
+                fi
             else
-                echo "❌ Error: PM2 start failed"
+                echo "❌ Error: PM2 start command failed"
                 exit 1
             fi
         fi
