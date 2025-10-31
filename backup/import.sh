@@ -19,6 +19,23 @@ elif [ -s "/home/master/.nvm/nvm.sh" ]; then
     # Setup Cloudways-specific paths
     export PATH="/home/master/bin:/home/master/bin/npm/lib/node_modules/bin:${PATH}"
     export NPM_CONFIG_CACHE="/home/master/.npm"
+
+    # Override HOME to public_html
+    # On Cloudways, the default HOME is owned by root, we need to use public_html instead
+    # Detect if we're in an app directory (has package.json)
+    if [ -f "$(pwd)/package.json" ]; then
+        # We're in app directory, set HOME to parent (public_html)
+        export HOME="$(dirname "$(pwd)")"
+    elif [[ "$(pwd)" == */public_html ]]; then
+        # We're already in public_html
+        export HOME="$(pwd)"
+    else
+        # Fallback: try to find public_html in the path
+        CURRENT_PATH="$(pwd)"
+        if [[ "$CURRENT_PATH" == */public_html/* ]]; then
+            export HOME="${CURRENT_PATH%%/public_html/*}/public_html"
+        fi
+    fi
 else
     echo "⚠️  Warning: NVM not found, using system Node/NPM"
 fi
