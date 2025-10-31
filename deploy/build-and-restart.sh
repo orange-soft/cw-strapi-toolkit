@@ -194,10 +194,27 @@ fi
 umask 002
 
 # Clean install with production dependencies only
-if npm ci --omit=dev --loglevel=error; then
+if npm ci --omit=dev; then
     INSTALL_END=$(date +%s)
     INSTALL_DURATION=$((INSTALL_END - INSTALL_START))
     echo "✅ Dependencies installed in ${INSTALL_DURATION}s"
+
+    # Verify strapi binary exists (critical for build)
+    if [ ! -f "${APP_ROOT}/node_modules/.bin/strapi" ]; then
+        echo "❌ Error: strapi binary not found after npm ci"
+        echo "   Expected: ${APP_ROOT}/node_modules/.bin/strapi"
+        echo "   This indicates an incomplete or corrupted installation"
+        echo ""
+        echo "   Checking @strapi/strapi package..."
+        if [ -d "${APP_ROOT}/node_modules/@strapi/strapi" ]; then
+            echo "   @strapi/strapi package directory exists"
+            ls -la "${APP_ROOT}/node_modules/@strapi/strapi/bin" 2>/dev/null || echo "   No bin directory found"
+        else
+            echo "   @strapi/strapi package directory NOT found"
+        fi
+        exit 1
+    fi
+    echo "✅ strapi binary verified"
 else
     echo "❌ Error: npm ci failed"
     exit 1
