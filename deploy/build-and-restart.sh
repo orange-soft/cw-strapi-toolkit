@@ -111,11 +111,24 @@ echo ""
 echo "📦 Installing production dependencies..."
 INSTALL_START=$(date +%s)
 
-# Verify .env file exists
+# Verify .env file exists and has correct permissions
 if [ ! -f "${APP_ROOT}/.env" ]; then
     echo "❌ Error: .env file not found!"
     echo "   Please ensure .env exists on the server before deploying."
     exit 1
+fi
+
+# Ensure .env is readable by PM2 process (needs 644 or 664)
+echo "🔒 Checking .env file permissions..."
+CURRENT_PERMS=$(stat -c "%a" "${APP_ROOT}/.env" 2>/dev/null || stat -f "%Lp" "${APP_ROOT}/.env" 2>/dev/null)
+
+if [ "$CURRENT_PERMS" != "644" ] && [ "$CURRENT_PERMS" != "664" ]; then
+    echo "   Current permissions: $CURRENT_PERMS (needs to be 644 or 664)"
+    echo "   Fixing .env permissions to 644..."
+    chmod 644 "${APP_ROOT}/.env"
+    echo "✅ .env permissions fixed"
+else
+    echo "✅ .env permissions correct ($CURRENT_PERMS)"
 fi
 
 # Clean install with production dependencies only
