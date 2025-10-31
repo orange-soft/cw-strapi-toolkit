@@ -76,21 +76,22 @@ case $COMMAND in
     restart)
         echo "♻️  Restarting PM2 process..."
 
-        # Clean up stale processes first (fixes "invalid PID" errors)
-        echo "🧹 Cleaning up stale PM2 processes..."
-        pm2 delete all 2>/dev/null || true
-        pm2 cleardump 2>/dev/null || true
-        pm2 kill 2>/dev/null || true
-        sleep 2
-
-        # Start fresh
-        echo "▶️  Starting PM2 with fresh state..."
-        if pm2 start ${ECOSYSTEM_CONFIG}; then
+        # Try graceful restart first
+        if pm2 restart ${ECOSYSTEM_CONFIG} 2>/dev/null; then
             pm2 save --force
             echo "✅ PM2 process restarted"
         else
-            echo "❌ Error: PM2 restart failed"
-            exit 1
+            # If restart fails (process not found), try delete + start for this app only
+            echo "🧹 Process not running, starting fresh..."
+            pm2 delete ${ECOSYSTEM_CONFIG} 2>/dev/null || true
+
+            if pm2 start ${ECOSYSTEM_CONFIG}; then
+                pm2 save --force
+                echo "✅ PM2 process started"
+            else
+                echo "❌ Error: PM2 start failed"
+                exit 1
+            fi
         fi
         ;;
 
@@ -102,12 +103,23 @@ case $COMMAND in
         ;;
 
     cleanup)
+        echo "⚠️  WARNING: This will delete ALL PM2 processes on this server!"
+        echo "   This affects all apps sharing the same PM2 instance."
+        echo ""
+        read -p "Are you sure you want to continue? (y/n) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Cleanup cancelled."
+            exit 0
+        fi
+
         echo "🧹 Cleaning up PM2 (fixes stale PID errors)..."
         pm2 delete all 2>/dev/null || true
         pm2 cleardump 2>/dev/null || true
         pm2 kill 2>/dev/null || true
         echo "✅ PM2 cleaned up - all processes removed"
-        echo "   Run 'start' or 'restart' to start your app again"
+        echo "   ⚠️  All PM2 apps on this server were stopped!"
+        echo "   Run 'start' or 'restart' in each app directory to restart them"
         ;;
 
     status|list)
@@ -138,17 +150,17 @@ case $COMMAND in
         echo "Usage: $0 [start|stop|restart|delete|cleanup|status|logs]"
         echo ""
         echo "Commands:"
-        echo "  start    - Start PM2 process"
-        echo "  stop     - Stop PM2 process"
-        echo "  restart  - Restart PM2 process (with automatic cleanup)"
-        echo "  delete   - Delete PM2 process"
-        echo "  cleanup  - Clean up PM2 (fixes stale PID errors)"
-        echo "  status   - Show PM2 status (default)"
+        echo "  start    - Start PM2 process for current app"
+        echo "  stop     - Stop PM2 process for current app"
+        echo "  restart  - Restart PM2 process for current app (graceful)"
+        echo "  delete   - Delete PM2 process for current app"
+        echo "  cleanup  - ⚠️  DANGEROUS: Delete ALL PM2 processes on server (with confirmation)"
+        echo "  status   - Show PM2 status (all processes)"
         echo "  logs [N] - Show PM2 logs for current app only (default: 50 lines)"
         echo ""
         echo "Examples:"
-        echo "  $0 restart     # Restart with automatic cleanup"
-        echo "  $0 cleanup     # Manual cleanup if seeing PID errors"
+        echo "  $0 restart     # Safely restart current app only"
+        echo "  $0 status      # Check all PM2 processes"
         echo "  $0 logs        # Show last 50 lines"
         echo "  $0 logs 100    # Show last 100 lines"
         echo ""
