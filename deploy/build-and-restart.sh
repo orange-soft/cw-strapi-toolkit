@@ -86,11 +86,6 @@ fi
 export PATH="${MASTER_HOME}/bin:${MASTER_HOME}/bin/npm/lib/node_modules/bin:${PATH}"
 export PM2_HOME="${MASTER_HOME}/.pm2"
 
-# Use per-app npm cache to avoid permission conflicts in multi-tenant environment
-# Shared cache at /home/master/.npm causes EACCES errors when different apps
-# create cache entries with different owners/permissions
-export NPM_CONFIG_CACHE="${HOME}/.npm"
-
 # Override HOME to public_html (parent of APP_ROOT) because:
 # - App user's $HOME (/home/master/applications/appuser1/) is owned by root
 # - public_html/ is the effective home for app user (writable)
@@ -98,6 +93,12 @@ export NPM_CONFIG_CACHE="${HOME}/.npm"
 # - Strapi creates $HOME/.config/com.strapi/config.json (unique UUID per app user)
 # - .config should be at public_html level (shared by all projects under same app user)
 export HOME="$(dirname "${APP_ROOT}")"
+
+# Use per-app npm cache to avoid permission conflicts in multi-tenant environment
+# Shared cache at /home/master/.npm causes EACCES errors when different apps
+# create cache entries with different owners/permissions
+# IMPORTANT: This must be set AFTER HOME is overridden above
+export NPM_CONFIG_CACHE="${HOME}/.npm"
 
 echo ""
 echo "🔍 Environment Info:"
