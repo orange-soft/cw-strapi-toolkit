@@ -18,7 +18,6 @@ elif [ -s "/home/master/.nvm/nvm.sh" ]; then
     \. "$NVM_DIR/nvm.sh"
     # Setup Cloudways-specific paths
     export PATH="/home/master/bin:/home/master/bin/npm/lib/node_modules/bin:${PATH}"
-    export NPM_CONFIG_CACHE="/home/master/.npm"
 
     # Override HOME to public_html
     # On Cloudways, the default HOME is owned by root, we need to use public_html instead
@@ -36,6 +35,9 @@ elif [ -s "/home/master/.nvm/nvm.sh" ]; then
             export HOME="${CURRENT_PATH%%/public_html/*}/public_html"
         fi
     fi
+
+    # Use per-app npm cache to avoid permission conflicts in multi-tenant environment
+    export NPM_CONFIG_CACHE="${HOME}/.npm"
 else
     echo "⚠️  Warning: NVM not found, using system Node/NPM"
 fi

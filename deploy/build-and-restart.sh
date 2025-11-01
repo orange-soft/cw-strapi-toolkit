@@ -86,8 +86,10 @@ fi
 export PATH="${MASTER_HOME}/bin:${MASTER_HOME}/bin/npm/lib/node_modules/bin:${PATH}"
 export PM2_HOME="${MASTER_HOME}/.pm2"
 
-# Set npm cache explicitly to master's location (accessible to www-data group)
-export NPM_CONFIG_CACHE="${MASTER_HOME}/.npm"
+# Use per-app npm cache to avoid permission conflicts in multi-tenant environment
+# Shared cache at /home/master/.npm causes EACCES errors when different apps
+# create cache entries with different owners/permissions
+export NPM_CONFIG_CACHE="${HOME}/.npm"
 
 # Override HOME to public_html (parent of APP_ROOT) because:
 # - App user's $HOME (/home/master/applications/appuser1/) is owned by root
@@ -108,7 +110,20 @@ echo "   PM2 Home: ${PM2_HOME}"
 echo "   NPM Cache: ${NPM_CONFIG_CACHE}"
 
 echo ""
-echo "🔧 Checking critical file permissions..."
+echo "🔧 Checking critical directories and permissions..."
+
+# Ensure npm cache directory exists with correct permissions
+if [ ! -d "${NPM_CONFIG_CACHE}" ]; then
+    echo "📁 Creating npm cache directory: ${NPM_CONFIG_CACHE}"
+    mkdir -p "${NPM_CONFIG_CACHE}" 2>/dev/null || {
+        echo "❌ Error: Cannot create npm cache directory"
+        exit 1
+    }
+fi
+
+# Set correct permissions on npm cache directory
+chmod 775 "${NPM_CONFIG_CACHE}" 2>/dev/null || echo "⚠️  Warning: Cannot set npm cache permissions"
+echo "✅ npm cache directory ready: ${NPM_CONFIG_CACHE}"
 
 # Check .env file exists and has correct permissions
 if [ ! -f "${APP_ROOT}/.env" ]; then

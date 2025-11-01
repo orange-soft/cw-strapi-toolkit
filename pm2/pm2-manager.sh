@@ -35,7 +35,9 @@ if [ -z "${NVM_DIR:-}" ] || ! command -v nvm &> /dev/null; then
     # Setup PM2 environment (same as build-and-restart.sh)
     export PATH="${MASTER_HOME}/bin:${MASTER_HOME}/bin/npm/lib/node_modules/bin:${PATH}"
     export PM2_HOME="${MASTER_HOME}/.pm2"
-    export NPM_CONFIG_CACHE="${MASTER_HOME}/.npm"
+
+    # Use per-app npm cache (set to parent of current directory = public_html)
+    export NPM_CONFIG_CACHE="$(dirname "$(pwd)")/.npm"
 fi
 
 # Detect ecosystem config file

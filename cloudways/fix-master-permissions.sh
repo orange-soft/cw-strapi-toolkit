@@ -58,19 +58,27 @@ fix_permissions() {
     # Check current permissions and group
     echo "   Current: $(ls -ld "$dir" | awk '{print $1, $3, $4}')"
 
-    # Set group permissions
+    # Set group permissions on directory
     if chmod "$perms" "$dir" 2>/dev/null; then
         echo "   ✅ Permissions set to ${perms}"
     else
         echo "   ⚠️  Cannot change permissions (may need master user or sudo)"
     fi
 
-    # Ensure group is www-data
+    # Ensure group is www-data on directory
     if chgrp "$GROUP" "$dir" 2>/dev/null; then
         echo "   ✅ Group set to ${GROUP}"
     else
         echo "   ⚠️  Cannot change group (may need master user or sudo)"
     fi
+
+    # Recursively fix all subdirectories and files
+    echo "   🔄 Fixing permissions recursively..."
+    # Directories: 775, Files: 664, Group: www-data
+    find "$dir" -type d -exec chmod 775 {} \; 2>/dev/null || echo "   ⚠️  Some directories could not be changed"
+    find "$dir" -type f -exec chmod 664 {} \; 2>/dev/null || echo "   ⚠️  Some files could not be changed"
+    chgrp -R "$GROUP" "$dir" 2>/dev/null || echo "   ⚠️  Some files/directories could not change group"
+    echo "   ✅ Recursive permissions fixed"
 
     echo ""
 }
