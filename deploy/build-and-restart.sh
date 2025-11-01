@@ -108,33 +108,40 @@ echo "   PM2 Home: ${PM2_HOME}"
 echo "   NPM Cache: ${NPM_CONFIG_CACHE}"
 
 echo ""
-echo "🔧 Checking app directory permissions..."
+echo "🔧 Checking critical file permissions..."
 
-# Use marker file in parent directory (public_html/) not app directory
-# Reason: Files in app directory may be removed during deployment (git clean, etc.)
-APP_NAME="$(basename "${APP_ROOT}")"
-PERMS_MARKER="${HOME}/.permissions-initialized-${APP_NAME}"
+# Check .env file exists and has correct permissions
+if [ ! -f "${APP_ROOT}/.env" ]; then
+    echo "❌ Error: .env file not found!"
+    echo "   Please ensure .env exists on the server before deploying."
+    exit 1
+fi
 
-if [ -f "$PERMS_MARKER" ]; then
-    echo "✅ App permissions already initialized (skipping)"
-else
-    echo "⚠️  First deployment detected - initializing permissions..."
-    echo ""
-
-    if [ -f "${APP_ROOT}/strapi-toolkit/cloudways/init-app-permissions.sh" ]; then
-        bash "${APP_ROOT}/strapi-toolkit/cloudways/init-app-permissions.sh"
-
-        # Create marker file in parent directory to prevent running again
-        touch "$PERMS_MARKER" 2>/dev/null || true
-        echo ""
-        echo "✅ Permissions initialized - future deployments will skip this step"
-        echo "   Marker file: $PERMS_MARKER"
+ENV_PERMS=$(stat -c "%a" "${APP_ROOT}/.env" 2>/dev/null || stat -f "%Lp" "${APP_ROOT}/.env" 2>/dev/null)
+if [ "$ENV_PERMS" != "644" ] && [ "$ENV_PERMS" != "664" ]; then
+    echo "⚠️  Warning: .env has restrictive permissions ($ENV_PERMS)"
+    echo "   Fixing to 644 (readable by PM2)..."
+    if chmod 644 "${APP_ROOT}/.env" 2>/dev/null; then
+        echo "✅ .env permissions fixed"
     else
-        echo "⚠️  Warning: init-app-permissions.sh not found in toolkit"
-        echo "   Permissions may cause issues. Consider running manually:"
-        echo "   bash strapi-toolkit/cloudways/init-app-permissions.sh"
+        echo "❌ Error: Cannot change .env permissions"
+        echo "   Run: bash strapi-toolkit/cloudways/init-app-permissions.sh"
+        exit 1
     fi
-    echo ""
+else
+    echo "✅ .env permissions correct ($ENV_PERMS)"
+fi
+
+# Check app root directory permissions
+APP_ROOT_PERMS=$(stat -c "%a" "${APP_ROOT}" 2>/dev/null || stat -f "%Lp" "${APP_ROOT}" 2>/dev/null)
+APP_ROOT_GROUP=$(stat -c "%G" "${APP_ROOT}" 2>/dev/null || stat -f "%Sg" "${APP_ROOT}" 2>/dev/null)
+
+if [ "$APP_ROOT_GROUP" != "www-data" ] || [[ ! "$APP_ROOT_PERMS" =~ ^[27]7[57]$ ]]; then
+    echo "⚠️  Warning: App directory has suboptimal permissions"
+    echo "   Current: $APP_ROOT_PERMS (group: $APP_ROOT_GROUP)"
+    echo "   Recommended: 775 (group: www-data)"
+    echo "   This may cause permission issues during deployment"
+    echo "   Fix by running: bash strapi-toolkit/cloudways/init-app-permissions.sh"
 fi
 
 echo ""
@@ -150,18 +157,19 @@ if [ -d "${APP_ROOT}/node_modules" ]; then
     # Check if removal was successful
     if [ -d "${APP_ROOT}/node_modules" ]; then
         echo "⚠️  Warning: Some directories could not be removed"
-        echo "   Trying with group write permissions fix..."
+        echo "   Retrying after 3 seconds (files may be temporarily locked)..."
+        sleep 3
 
-        # Fix group permissions (www-data group needs write access)
-        chmod -R g+w "${APP_ROOT}/node_modules" 2>/dev/null || true
+        # Retry removal
         rm -rf "${APP_ROOT}/node_modules" 2>/dev/null || true
 
         if [ -d "${APP_ROOT}/node_modules" ]; then
-            echo "❌ Error: Failed to fully remove node_modules"
-            echo "   npm ci may fail with ENOTEMPTY errors"
-            echo "   This may require manual cleanup or fix-permissions.sh"
+            echo "❌ Error: Failed to remove node_modules after retry"
+            echo "   This may indicate permission issues or locked files"
+            echo "   Fix by running: bash strapi-toolkit/cloudways/init-app-permissions.sh"
+            exit 1
         else
-            echo "✅ node_modules removed (after permission fix)"
+            echo "✅ node_modules removed (after retry)"
         fi
     else
         echo "✅ node_modules removed"
@@ -169,26 +177,6 @@ if [ -d "${APP_ROOT}/node_modules" ]; then
 fi
 
 INSTALL_START=$(date +%s)
-
-# Verify .env file exists and has correct permissions
-if [ ! -f "${APP_ROOT}/.env" ]; then
-    echo "❌ Error: .env file not found!"
-    echo "   Please ensure .env exists on the server before deploying."
-    exit 1
-fi
-
-# Ensure .env is readable by PM2 process (needs 644 or 664)
-echo "🔒 Checking .env file permissions..."
-CURRENT_PERMS=$(stat -c "%a" "${APP_ROOT}/.env" 2>/dev/null || stat -f "%Lp" "${APP_ROOT}/.env" 2>/dev/null)
-
-if [ "$CURRENT_PERMS" != "644" ] && [ "$CURRENT_PERMS" != "664" ]; then
-    echo "   Current permissions: $CURRENT_PERMS (needs to be 644 or 664)"
-    echo "   Fixing .env permissions to 644..."
-    chmod 644 "${APP_ROOT}/.env"
-    echo "✅ .env permissions fixed"
-else
-    echo "✅ .env permissions correct ($CURRENT_PERMS)"
-fi
 
 # Set umask to ensure group write permissions (002 = rwxrwxr-x for directories)
 umask 002
