@@ -12,9 +12,11 @@ if ! command -v node &> /dev/null; then
     exit 1
 fi
 
-# Get the script directory
+# Get the script directory and app root
+# Script is at: app/strapi-toolkit/setup/setup-env-keys.sh
+# App root is at: app/
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+APP_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ENV_FILE="${APP_ROOT}/.env"
 
 # Function to generate a random 32-byte base64 key
