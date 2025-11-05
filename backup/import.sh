@@ -129,14 +129,31 @@ format_duration() {
 
 # Cleanup function
 cleanup() {
+  local exit_code=$?
+
+  # Clean up downloaded backup file (if we downloaded it)
   if [ -n "$TEMP_DOWNLOADED_FILE" ] && [ -f "$TEMP_DOWNLOADED_FILE" ]; then
-    info_msg "Cleaning up temporary files..."
+    info_msg "Cleaning up downloaded file..."
     rm -f "$TEMP_DOWNLOADED_FILE"
+  fi
+
+  # Clean up copied backup file (if we copied it to current dir)
+  if [ -n "$TEMP_COPIED_FILE" ] && [ -f "$TEMP_COPIED_FILE" ]; then
+    info_msg "Cleaning up copied backup file..."
+    rm -f "$TEMP_COPIED_FILE"
+  fi
+
+  # IMPORTANT: Do NOT delete BACKUP_FILE (database dump)
+  # User needs it to restore if import failed
+  if [ -n "$BACKUP_FILE" ] && [ -f "$BACKUP_FILE" ] && [ $exit_code -ne 0 ]; then
+    echo ""
+    warn_msg "Script failed! Database backup preserved at: $BACKUP_FILE"
+    warn_msg "To restore, run: gunzip < $BACKUP_FILE | mysql -u \$DB_USER -p \$DB_NAME"
   fi
 }
 
-# Set trap for cleanup on exit
-trap cleanup EXIT
+# Set trap for cleanup on exit, interruption, and termination
+trap cleanup EXIT INT TERM
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -365,35 +382,294 @@ if [ "$IMPORT_FILE" != "$TARGET_FILE" ]; then
 fi
 
 echo ""
-warn_msg "About to import backup with --force flag (this will overwrite existing data)"
-info_msg "Import file: $TARGET_FILE"
+echo "========================================"
+echo "    Database Backup (Safety)"
+echo "========================================"
 echo ""
 
-# Prompt for confirmation
-read -p "Continue with import? (yes/NO): " CONFIRM
+# Extract database credentials from .env
+info_msg "Reading database credentials from .env..."
 
-# Default to "no" if empty
-if [ -z "$CONFIRM" ]; then
-  CONFIRM="no"
+if [ ! -f ".env" ]; then
+  error_exit ".env file not found"
 fi
 
-if [[ ! "$CONFIRM" =~ ^[Yy][Ee][Ss]$ ]]; then
-  info_msg "Import cancelled by user"
+DB_CLIENT=$(grep "^DATABASE_CLIENT=" .env | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+DB_HOST=$(grep "^DATABASE_HOST=" .env | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+DB_PORT=$(grep "^DATABASE_PORT=" .env | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+DB_NAME=$(grep "^DATABASE_NAME=" .env | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+DB_USER=$(grep "^DATABASE_USERNAME=" .env | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+DB_PASS=$(grep "^DATABASE_PASSWORD=" .env | cut -d '=' -f2 | tr -d '"' | tr -d "'")
 
-  # Clean up copied file if user cancels
-  if [ -n "$TEMP_COPIED_FILE" ] && [ -f "$TEMP_COPIED_FILE" ]; then
-    rm -f "$TEMP_COPIED_FILE"
+# Set defaults
+DB_CLIENT=${DB_CLIENT:-mysql}
+DB_HOST=${DB_HOST:-localhost}
+DB_PORT=${DB_PORT:-3306}
+
+# Validate required fields
+if [ -z "$DB_NAME" ]; then
+  error_exit "DATABASE_NAME not found in .env"
+fi
+
+if [ -z "$DB_USER" ]; then
+  error_exit "DATABASE_USERNAME not found in .env"
+fi
+
+success_msg "Database credentials loaded"
+info_msg "Database: $DB_NAME (${DB_CLIENT})"
+
+# Only proceed with backup and cleanup if MySQL (SQLite doesn't need this)
+if [ "$DB_CLIENT" = "mysql" ]; then
+  # Check if mysql/mysqldump are available
+  if ! command -v mysql &> /dev/null || ! command -v mysqldump &> /dev/null; then
+    error_exit "mysql/mysqldump not found. Please install MySQL client tools."
   fi
 
-  exit 0
+  # Build mysql command
+  MYSQL_CMD="mysql -h $DB_HOST -P $DB_PORT -u $DB_USER"
+  MYSQLDUMP_CMD="mysqldump -h $DB_HOST -P $DB_PORT -u $DB_USER"
+  if [ -n "$DB_PASS" ]; then
+    MYSQL_CMD="$MYSQL_CMD -p$DB_PASS"
+    MYSQLDUMP_CMD="$MYSQLDUMP_CMD -p$DB_PASS"
+  fi
+
+  # Test database connection
+  info_msg "Testing database connection..."
+  if ! $MYSQL_CMD -e "SELECT 1" $DB_NAME &> /dev/null; then
+    error_exit "Cannot connect to database. Please check your credentials."
+  fi
+  success_msg "Database connection successful"
+
+  echo ""
+  info_msg "Creating database backup before import..."
+
+  # Create backup filename with timestamp
+  BACKUP_TIMESTAMP=$(date +%s)
+  BACKUP_FILE="db-dump-${BACKUP_TIMESTAMP}.sql.gz"
+
+  # Create backup
+  $MYSQLDUMP_CMD --single-transaction --quick --lock-tables=false $DB_NAME | gzip > "$BACKUP_FILE" || {
+    error_exit "Database backup failed"
+  }
+
+  # Verify backup file exists and has content
+  if [ ! -f "$BACKUP_FILE" ]; then
+    error_exit "Backup file was not created"
+  fi
+
+  BACKUP_SIZE=$(stat -f%z "$BACKUP_FILE" 2>/dev/null || stat -c%s "$BACKUP_FILE" 2>/dev/null)
+  if [ "$BACKUP_SIZE" -lt 100 ]; then
+    error_exit "Backup file is suspiciously small ($BACKUP_SIZE bytes)"
+  fi
+
+  BACKUP_SIZE_FORMATTED=$(format_bytes $BACKUP_SIZE)
+  success_msg "Database backup created: $BACKUP_FILE ($BACKUP_SIZE_FORMATTED)"
+
+  echo ""
+  echo "========================================"
+  echo "    Drop Tables Confirmation"
+  echo "========================================"
+  echo ""
+
+  warn_msg "⚠️  WARNING: This will DROP ALL TABLES in database '$DB_NAME'"
+  echo ""
+  info_msg "✅ Backup saved to: $BACKUP_FILE"
+  info_msg "📦 Import file: $TARGET_FILE"
+  echo ""
+  warn_msg "If import fails, restore with:"
+  echo "  gunzip < $BACKUP_FILE | mysql -u $DB_USER -p $DB_NAME"
+  echo ""
+
+  read -p "Continue with dropping all tables? (yes/NO): " CONFIRM
+
+  # Default to "no" if empty
+  if [ -z "$CONFIRM" ]; then
+    CONFIRM="no"
+  fi
+
+  if [[ ! "$CONFIRM" =~ ^[Yy][Ee][Ss]$ ]]; then
+    info_msg "Import cancelled by user"
+    info_msg "Backup file preserved: $BACKUP_FILE"
+
+    # Clean up copied file if user cancels
+    if [ -n "$TEMP_COPIED_FILE" ] && [ -f "$TEMP_COPIED_FILE" ]; then
+      rm -f "$TEMP_COPIED_FILE"
+    fi
+
+    exit 0
+  fi
+
+  echo ""
+  echo "========================================"
+  echo "    Clearing Database"
+  echo "========================================"
+  echo ""
+
+  info_msg "Dropping all tables..."
+
+  # Get all table names
+  TABLES=$($MYSQL_CMD -N -e "SHOW TABLES" $DB_NAME 2>/dev/null)
+
+  if [ -n "$TABLES" ]; then
+    # Count tables
+    TABLE_COUNT=$(echo "$TABLES" | wc -l | tr -d ' ')
+    info_msg "Found $TABLE_COUNT tables to drop"
+
+    # Build DROP TABLE statement (batch drop for efficiency)
+    DROP_STATEMENT="SET FOREIGN_KEY_CHECKS=0; DROP TABLE IF EXISTS "
+    FIRST=true
+    while IFS= read -r table; do
+      if [ "$FIRST" = true ]; then
+        DROP_STATEMENT="${DROP_STATEMENT}\`$table\`"
+        FIRST=false
+      else
+        DROP_STATEMENT="${DROP_STATEMENT}, \`$table\`"
+      fi
+    done <<< "$TABLES"
+    DROP_STATEMENT="${DROP_STATEMENT}; SET FOREIGN_KEY_CHECKS=1;"
+
+    # Execute drop
+    $MYSQL_CMD $DB_NAME -e "$DROP_STATEMENT" 2>/dev/null || {
+      error_exit "Failed to drop tables"
+    }
+
+    # Verify all tables are dropped
+    REMAINING_TABLES=$($MYSQL_CMD -N -e "SHOW TABLES" $DB_NAME 2>/dev/null)
+    if [ -n "$REMAINING_TABLES" ]; then
+      warn_msg "Some tables could not be dropped:"
+      echo "$REMAINING_TABLES"
+      error_exit "Database cleanup incomplete"
+    fi
+
+    success_msg "All tables dropped successfully"
+  else
+    info_msg "No tables to drop (database is empty)"
+  fi
+
+  echo ""
+  echo "========================================"
+  echo "    Database Encoding Check"
+  echo "========================================"
+  echo ""
+
+  info_msg "Checking database default encoding before import..."
+
+  # Get database-level encoding and collation
+  DB_CHARSET=$($MYSQL_CMD -N -e "SELECT DEFAULT_CHARACTER_SET_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='$DB_NAME'" 2>/dev/null)
+  DB_COLLATION=$($MYSQL_CMD -N -e "SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='$DB_NAME'" 2>/dev/null)
+
+  info_msg "Current database defaults: $DB_CHARSET / $DB_COLLATION"
+
+  # Check if database needs conversion
+  if [ "$DB_CHARSET" != "utf8mb4" ] || [ "$DB_COLLATION" != "utf8mb4_unicode_ci" ]; then
+    echo ""
+    warn_msg "Database default encoding is not utf8mb4/utf8mb4_unicode_ci"
+    warn_msg "Imported data may have issues with emoji and unicode characters"
+    echo ""
+    echo "Options:"
+    echo "  [1] Convert database to utf8mb4/utf8mb4_unicode_ci (recommended)"
+    echo "  [2] Continue without conversion (may cause data corruption)"
+    echo "  [3] Cancel import"
+    echo ""
+    read -p "Enter your choice (1-3): " ENCODING_CHOICE
+
+    case $ENCODING_CHOICE in
+      1)
+        info_msg "Converting database to utf8mb4/utf8mb4_unicode_ci..."
+        $MYSQL_CMD -e "ALTER DATABASE \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci" 2>/dev/null || {
+          error_exit "Failed to convert database encoding"
+        }
+
+        # Verify conversion
+        NEW_DB_CHARSET=$($MYSQL_CMD -N -e "SELECT DEFAULT_CHARACTER_SET_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='$DB_NAME'" 2>/dev/null)
+        NEW_DB_COLLATION=$($MYSQL_CMD -N -e "SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='$DB_NAME'" 2>/dev/null)
+
+        if [ "$NEW_DB_CHARSET" != "utf8mb4" ] || [ "$NEW_DB_COLLATION" != "utf8mb4_unicode_ci" ]; then
+          error_exit "Database conversion verification failed"
+        fi
+
+        success_msg "Database converted to utf8mb4/utf8mb4_unicode_ci"
+        info_msg "Imported tables will use utf8mb4/utf8mb4_unicode_ci"
+        ;;
+      2)
+        warn_msg "Continuing without encoding conversion"
+        warn_msg "Imported data may be corrupted if it contains emoji or special unicode"
+        ;;
+      3)
+        info_msg "Import cancelled by user"
+        exit 0
+        ;;
+      *)
+        error_exit "Invalid choice: $ENCODING_CHOICE"
+        ;;
+    esac
+  else
+    success_msg "Database encoding is correct (utf8mb4/utf8mb4_unicode_ci)"
+    info_msg "Imported tables will use utf8mb4/utf8mb4_unicode_ci"
+  fi
+
+else
+  # SQLite or other database
+  info_msg "Skipping database backup and cleanup for $DB_CLIENT"
+
+  echo ""
+  warn_msg "About to import backup with --force flag (this will overwrite existing data)"
+  info_msg "Import file: $TARGET_FILE"
+  echo ""
+
+  # Prompt for confirmation
+  read -p "Continue with import? (yes/NO): " CONFIRM
+
+  # Default to "no" if empty
+  if [ -z "$CONFIRM" ]; then
+    CONFIRM="no"
+  fi
+
+  if [[ ! "$CONFIRM" =~ ^[Yy][Ee][Ss]$ ]]; then
+    info_msg "Import cancelled by user"
+
+    # Clean up copied file if user cancels
+    if [ -n "$TEMP_COPIED_FILE" ] && [ -f "$TEMP_COPIED_FILE" ]; then
+      rm -f "$TEMP_COPIED_FILE"
+    fi
+
+    exit 0
+  fi
 fi
 
 echo ""
-info_msg "Starting backup import..."
+echo "========================================"
+echo "    Running Strapi Import"
+echo "========================================"
 echo ""
 
-# Run the import (use full filename with extension)
-npm run strapi import -- -f "$IMPORT_FILENAME" --force || error_exit "Backup import failed"
+info_msg "Starting import with DATA_IMPORT_MODE enabled..."
+echo ""
+
+# Run the import with DATA_IMPORT_MODE for extended MySQL lock timeout
+# This sets innodb_lock_wait_timeout to 900 seconds for long-running transactions
+# Note: Setting the variable inline ensures it ONLY applies to this command
+DATA_IMPORT_MODE=true npm run strapi import -- -f "$IMPORT_FILENAME" --force || {
+  echo ""
+  error_exit "Backup import failed. Restore from: $BACKUP_FILE"
+}
+
+echo ""
+success_msg "Import completed successfully"
+
+# Verify import success (MySQL only)
+if [ "$DB_CLIENT" = "mysql" ]; then
+  echo ""
+  info_msg "Verifying import..."
+
+  TABLE_COUNT=$($MYSQL_CMD -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$DB_NAME'" 2>/dev/null)
+
+  if [ "$TABLE_COUNT" -gt 0 ]; then
+    success_msg "Import verification passed ($TABLE_COUNT tables created)"
+  else
+    warn_msg "No tables found after import (this may be normal for empty backups)"
+  fi
+fi
 
 # Clean up the copied file after successful import
 if [ -n "$TEMP_COPIED_FILE" ] && [ -f "$TEMP_COPIED_FILE" ]; then
@@ -418,6 +694,14 @@ else
   echo "Source: Local file"
 fi
 echo "File: $IMPORT_FILE"
+if [ -n "$BACKUP_FILE" ]; then
+  echo "Database backup: $BACKUP_FILE"
+fi
 echo "Duration: $DURATION_FORMATTED"
 echo "========================================"
+if [ -n "$BACKUP_FILE" ]; then
+  echo ""
+  info_msg "Database backup preserved at: $BACKUP_FILE"
+  info_msg "You can safely delete it after verifying the import"
+fi
 echo ""
