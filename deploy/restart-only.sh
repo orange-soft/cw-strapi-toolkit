@@ -184,68 +184,45 @@ else
 fi
 
 echo ""
-echo "📦 Installing production dependencies..."
+echo "📦 Verifying production dependencies..."
+echo "ℹ️  Dependencies were installed on GitHub Actions and synced via rsync"
+echo "   Skipping npm ci on server (saves ~5-10 minutes!)"
 
-# Clean node_modules to prevent ENOTEMPTY errors from stale state
-if [ -d "${APP_ROOT}/node_modules" ]; then
-    echo "🧹 Removing existing node_modules for clean install..."
-
-    # Try to remove with force, suppressing errors initially
-    rm -rf "${APP_ROOT}/node_modules" 2>/dev/null || true
-
-    # Check if removal was successful
-    if [ -d "${APP_ROOT}/node_modules" ]; then
-        echo "⚠️  Warning: Some directories could not be removed"
-        echo "   Retrying after 3 seconds (files may be temporarily locked)..."
-        sleep 3
-
-        # Retry removal
-        rm -rf "${APP_ROOT}/node_modules" 2>/dev/null || true
-
-        if [ -d "${APP_ROOT}/node_modules" ]; then
-            echo "❌ Error: Failed to remove node_modules after retry"
-            echo "   This may indicate permission issues or locked files"
-            echo "   Fix by running: bash strapi-toolkit/cloudways/init-app-permissions.sh"
-            exit 1
-        else
-            echo "✅ node_modules removed (after retry)"
-        fi
-    else
-        echo "✅ node_modules removed"
-    fi
-fi
-
-INSTALL_START=$(date +%s)
-
-# Set umask to ensure group write permissions (002 = rwxrwxr-x for directories)
-umask 002
-
-# Clean install with production dependencies only
-if npm ci --omit=dev; then
-    INSTALL_END=$(date +%s)
-    INSTALL_DURATION=$((INSTALL_END - INSTALL_START))
-    echo "✅ Dependencies installed in ${INSTALL_DURATION}s"
-
-    # Verify strapi binary exists (required for runtime)
-    if [ ! -f "${APP_ROOT}/node_modules/.bin/strapi" ]; then
-        echo "❌ Error: strapi binary not found after npm ci"
-        echo "   Expected: ${APP_ROOT}/node_modules/.bin/strapi"
-        echo "   This indicates an incomplete or corrupted installation"
-        echo ""
-        echo "   Checking @strapi/strapi package..."
-        if [ -d "${APP_ROOT}/node_modules/@strapi/strapi" ]; then
-            echo "   @strapi/strapi package directory exists"
-            ls -la "${APP_ROOT}/node_modules/@strapi/strapi/bin" 2>/dev/null || echo "   No bin directory found"
-        else
-            echo "   @strapi/strapi package directory NOT found"
-        fi
-        exit 1
-    fi
-    echo "✅ strapi binary verified"
-else
-    echo "❌ Error: npm ci failed"
+# Verify node_modules exists (should come from GitHub Actions)
+if [ ! -d "${APP_ROOT}/node_modules" ]; then
+    echo "❌ Error: node_modules directory not found!"
+    echo "   Expected: ${APP_ROOT}/node_modules"
+    echo "   This means rsync didn't sync node_modules properly."
+    echo ""
+    echo "   Possible causes:"
+    echo "   1. GitHub Actions didn't install dependencies"
+    echo "   2. rsync excluded node_modules (check deploy.yml)"
+    echo "   3. Insufficient disk space on server"
     exit 1
 fi
+
+echo "✅ node_modules directory found"
+
+# Verify strapi binary exists (required for runtime)
+if [ ! -f "${APP_ROOT}/node_modules/.bin/strapi" ]; then
+    echo "❌ Error: strapi binary not found"
+    echo "   Expected: ${APP_ROOT}/node_modules/.bin/strapi"
+    echo "   This indicates an incomplete or corrupted installation"
+    echo ""
+    echo "   Checking @strapi/strapi package..."
+    if [ -d "${APP_ROOT}/node_modules/@strapi/strapi" ]; then
+        echo "   @strapi/strapi package directory exists"
+        ls -la "${APP_ROOT}/node_modules/@strapi/strapi/bin" 2>/dev/null || echo "   No bin directory found"
+    else
+        echo "   @strapi/strapi package directory NOT found"
+    fi
+    echo ""
+    echo "   Try running: npm ci --omit=dev"
+    exit 1
+fi
+
+echo "✅ strapi binary verified"
+echo "✅ Dependencies verification complete (no installation needed)"
 
 echo ""
 echo "📊 Disk Usage:"
