@@ -31,6 +31,7 @@ The Cloudways master home is `/home/master`, or `/mnt/BLOCKSTORAGE/home/master` 
   - [Process Management](#3-process-management)
   - [Environment Setup](#4-environment-setup)
   - [Cloudways Utilities](#5-cloudways-specific-utilities)
+  - [cPanel Utilities](#6-cpanel-specific-utilities)
 - [Workflow Examples](#workflow-examples)
 - [Design & Architecture](#design--architecture)
 - [Environment Compatibility](#environment-compatibility)
@@ -111,8 +112,14 @@ strapi-toolkit/
 │   ├── fix-permissions.sh     # Fix file permissions
 │   └── check-ports.sh         # Check port usage
 │
+├── cpanel/          # cPanel server setup tools (see cpanel/README.md)
+│   ├── setup-site.sh          # One-time setup of a new site (as the cPanel user)
+│   ├── pm2-boot-service.sh    # Restore PM2 apps after reboot (root, once per server)
+│   └── generate-deploy-key.sh # Deploy keypair helper
+│
 ├── deploy/          # Deployment orchestration
-│   └── build-and-restart.sh   # Full deployment workflow
+│   ├── build-and-restart.sh   # Full deployment workflow (build on the server)
+│   └── restart-only.sh        # Server half of a GitHub Actions deploy
 │
 ├── pm2/             # PM2 process management
 │   └── pm2-manager.sh         # Unified PM2 interface
@@ -699,6 +706,25 @@ bash strapi-toolkit/cloudways/check-ports.sh
 
 ---
 
+## 6. cPanel-Specific Utilities
+
+Server setup tools for cPanel/WHM servers (one site per cPanel account, each with its own `~/.nvm` and `~/.pm2`). Deploys don't use them; see [`cpanel/README.md`](cpanel/README.md) for installing and running them.
+
+| Script | Run as | Purpose |
+|---|---|---|
+| `cpanel/setup-site.sh` | the site's cPanel user (installed as `setup-strapi-site`) | One-time site setup: deploy key, NVM + Node, clone, `.env` with secrets, free port |
+| `cpanel/pm2-boot-service.sh` | root, once per server | systemd service that restores every user's PM2 apps after a reboot |
+| `cpanel/generate-deploy-key.sh` | the site's cPanel user | Generates the GitHub Actions deploy keypair |
+
+Root installs them straight from this repo, e.g.:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/master/cpanel/setup-site.sh -o /tmp/setup-site.sh
+sudo install -m 755 /tmp/setup-site.sh /usr/local/bin/setup-strapi-site
+```
+
+---
+
 ## Workflow Examples
 
 Complete step-by-step guides for common scenarios.
@@ -1000,6 +1026,9 @@ bash sync-to-cloudways.sh --file=./[TAB]
 | `cloudways/sync-to-cloudways.sh` | ✅ | ✅ | ✅ | ✅ | Universal (requires rsync) |
 | `cloudways/fix-permissions.sh` | ❌ | ❌ | ❌ | ✅ | Cloudways only |
 | `cloudways/check-ports.sh` | ⚠️ | ✅ | ⚠️ | ✅ | Linux/Cloudways |
+| `cpanel/setup-site.sh` | ❌ | ❌ | ✅ | ❌ | cPanel only (as the site user) |
+| `cpanel/pm2-boot-service.sh` | ❌ | ❌ | ✅ | ❌ | cPanel only (root, systemd) |
+| `cpanel/generate-deploy-key.sh` | ✅ | ✅ | ✅ | ❌ | Any shell with ssh-keygen |
 
 **Legend:** ✅ Fully supported | ⚠️ Partial support | ❌ Not applicable
 
