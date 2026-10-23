@@ -4,20 +4,29 @@ set -e
 # Script: Strapi Backup Import
 # Description: Downloads and imports Strapi backup data with validation and extraction
 
-# Auto-detect NVM location (Cloudways, local, or custom)
+# Auto-detect NVM location (local, cPanel, Cloudways, or custom)
+# Cloudways master home: /home/master, or /mnt/BLOCKSTORAGE/home/master on block storage servers
+CW_MASTER_HOME=""
+for dir in /home/master /mnt/BLOCKSTORAGE/home/master; do
+    if [ -s "${dir}/.nvm/nvm.sh" ]; then
+        CW_MASTER_HOME="${dir}"
+        break
+    fi
+done
+
 if [ -n "$NVM_DIR" ] && [ -s "$NVM_DIR/nvm.sh" ]; then
     # NVM_DIR already set and valid
     \. "$NVM_DIR/nvm.sh"
 elif [ -s "$HOME/.nvm/nvm.sh" ]; then
-    # Standard location (macOS/Linux local)
+    # Standard location (macOS/Linux local, cPanel per-user)
     export NVM_DIR="$HOME/.nvm"
     \. "$NVM_DIR/nvm.sh"
-elif [ -s "/home/master/.nvm/nvm.sh" ]; then
+elif [ -n "${CW_MASTER_HOME}" ]; then
     # Cloudways location
-    export NVM_DIR="/home/master/.nvm"
+    export NVM_DIR="${CW_MASTER_HOME}/.nvm"
     \. "$NVM_DIR/nvm.sh"
     # Setup Cloudways-specific paths
-    export PATH="/home/master/bin:/home/master/bin/npm/lib/node_modules/bin:${PATH}"
+    export PATH="${CW_MASTER_HOME}/bin:${CW_MASTER_HOME}/bin/npm/lib/node_modules/bin:${PATH}"
 
     # Override HOME to public_html
     # On Cloudways, the default HOME is owned by root, we need to use public_html instead
@@ -38,6 +47,10 @@ elif [ -s "/home/master/.nvm/nvm.sh" ]; then
 
     # Use per-app npm cache to avoid permission conflicts in multi-tenant environment
     export NPM_CONFIG_CACHE="${HOME}/.npm"
+elif [ -s "/opt/nvm/nvm.sh" ]; then
+    # Legacy shared NVM (cPanel servers before per-user ~/.nvm)
+    export NVM_DIR="/opt/nvm"
+    \. "$NVM_DIR/nvm.sh"
 else
     echo "⚠️  Warning: NVM not found, using system Node/NPM"
 fi

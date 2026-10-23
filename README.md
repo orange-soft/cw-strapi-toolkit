@@ -1,6 +1,21 @@
 # Cloudways Strapi Toolkit
 
-A comprehensive collection of battle-tested DevOps scripts for managing Strapi applications across different environments: local development, legacy servers, and Cloudways production hosting.
+A comprehensive collection of battle-tested DevOps scripts for managing Strapi applications across different environments: local development, cPanel servers, and Cloudways production hosting.
+
+### Supported Servers
+
+The same scripts run on both server types. Nothing is configured per server: the scripts detect it from the app path. To force a type (e.g. for a host whose paths look different), set `DEPLOY_SERVER_TYPE=cpanel` or `DEPLOY_SERVER_TYPE=cloudways` in the environment; the boilerplate's deploy workflow passes its `DEPLOY_SERVER_TYPE` GitHub variable through. When running scripts by hand on such a host, prefix them the same way, e.g. `DEPLOY_SERVER_TYPE=cpanel bash strapi-toolkit/pm2/pm2-manager.sh status`.
+
+| | cPanel | Cloudways |
+|---|---|---|
+| Detected by (unless `DEPLOY_SERVER_TYPE` is set) | anything else | app path contains `/applications/` or `.cloudwaysapps.com/` |
+| App path | `/home/<user>/public_html/<project>` | `/home/<server>.cloudwaysapps.com/<app>/public_html/<project>` |
+| SSH / deploy user | the cPanel user | the app user (or master) |
+| NVM | the user's own `~/.nvm` (legacy: shared `/opt/nvm`) | the master user's `~/.nvm`, shared by all apps |
+| PM2 | one daemon per user (`~/.pm2`) | one shared daemon (`<master home>/.pm2`) |
+| `nvm alias default` | set to `.nvmrc` on each deploy | never changed (shared by all apps) |
+
+The Cloudways master home is `/home/master`, or `/mnt/BLOCKSTORAGE/home/master` on block storage servers. Set `MASTER_HOME` to override it.
 
 ---
 
@@ -287,11 +302,10 @@ bash strapi-toolkit/backup/import.sh --file ./strapi-backup-20241030-153045.tar.
 bash strapi-toolkit/deploy/build-and-restart.sh
 ```
 
-**Environment Detection:**
-- Checks `NVM_DIR` environment variable first (parent script inheritance)
-- Falls back to `$HOME/.nvm/nvm.sh` (standard location)
-- Falls back to `/home/master/.nvm/nvm.sh` (Cloudways location)
-- Uses system Node/NPM as last resort
+**Environment Detection** (see [Supported Servers](#supported-servers)):
+- cPanel: the login user's own `~/.nvm` and `~/.pm2`, falling back to the legacy shared `/opt/nvm`
+- Cloudways: the master user's `~/.nvm` and `~/.pm2` (`MASTER_HOME`, `/home/master` or `/mnt/BLOCKSTORAGE/home/master`)
+- Uses the login user's real home, even when a parent script has overridden `HOME`
 
 **PM2 Config Detection:**
 - Looks for `ecosystem.config.js` first
@@ -303,6 +317,23 @@ bash strapi-toolkit/deploy/build-and-restart.sh
 - Rebuilding after dependency changes
 - Applying configuration changes
 - Standard deployment workflow
+
+### `deploy/restart-only.sh`
+
+**Purpose:** Server half of a GitHub Actions deploy, where the admin panel is built on the runner and synced with rsync (without `node_modules`)
+
+**Workflow:**
+1. Load NVM and the Node version from `.nvmrc` (same detection as `build-and-restart.sh`), export `NODE_BIN`
+2. Check `.env` and the synced `dist/` (or `build/`)
+3. Install production dependencies on the server (`npm ci --omit=dev`), so native modules match the server's Node and OS
+4. Restart PM2 (recreates the process if the Node version changed)
+
+**Usage:**
+
+```bash
+# Run from your Strapi project root (called by the GitHub Actions deploy workflow)
+bash strapi-toolkit/deploy/restart-only.sh
+```
 
 ---
 
@@ -835,7 +866,8 @@ bash strapi-toolkit/pm2/pm2-manager.sh logs 50
 ### Environment Auto-Detection
 
 All scripts automatically detect:
-- **NVM location** - `$HOME/.nvm` or `/home/master/.nvm` (Cloudways)
+- **Server type** - `DEPLOY_SERVER_TYPE` if set, else Cloudways from the app path (`/applications/` or `.cloudwaysapps.com/`), otherwise cPanel
+- **NVM & PM2 location** - cPanel: the user's `~/.nvm` + `~/.pm2` (or `/opt/nvm`); Cloudways: the master home's `.nvm` + `.pm2`
 - **Cloudways master home** - `/home/master` or `/mnt/BLOCKSTORAGE/home/master` (block storage), from the app path; override with `MASTER_HOME`
 - **Node version** - Reads from `.nvmrc` file
 - **PM2 config** - Supports both `.js` and `.cjs` formats
@@ -950,17 +982,18 @@ bash sync-to-cloudways.sh --file=./[TAB]
 
 ## Environment Compatibility
 
-| Script | macOS | Linux | Cloudways | Notes |
-|--------|-------|-------|-----------|-------|
-| `backup/export.sh` | ✅ | ✅ | ✅ | Universal |
-| `backup/import.sh` | ✅ | ✅ | ✅ | Universal |
-| `deploy/build-and-restart.sh` | ⚠️ | ✅ | ✅ | Requires PM2 |
-| `pm2/pm2-manager.sh` | ✅ | ✅ | ✅ | Universal (if PM2 installed) |
-| `setup/generate-env-keys.sh` | ✅ | ✅ | ✅ | Universal |
-| `setup/setup-env-keys.sh` | ✅ | ✅ | ✅ | Universal |
-| `cloudways/sync-to-cloudways.sh` | ✅ | ✅ | ✅ | Universal (requires rsync) |
-| `cloudways/fix-permissions.sh` | ❌ | ❌ | ✅ | Cloudways only |
-| `cloudways/check-ports.sh` | ⚠️ | ✅ | ✅ | Linux/Cloudways |
+| Script | macOS | Linux | cPanel | Cloudways | Notes |
+|--------|-------|-------|--------|-----------|-------|
+| `backup/export.sh` | ✅ | ✅ | ✅ | ✅ | Universal |
+| `backup/import.sh` | ✅ | ✅ | ✅ | ✅ | Universal |
+| `deploy/build-and-restart.sh` | ⚠️ | ✅ | ✅ | ✅ | Requires PM2 |
+| `deploy/restart-only.sh` | ⚠️ | ✅ | ✅ | ✅ | GitHub Actions deploys |
+| `pm2/pm2-manager.sh` | ✅ | ✅ | ✅ | ✅ | Universal (installs PM2 if missing) |
+| `setup/generate-env-keys.sh` | ✅ | ✅ | ✅ | ✅ | Universal |
+| `setup/setup-env-keys.sh` | ✅ | ✅ | ✅ | ✅ | Universal |
+| `cloudways/sync-to-cloudways.sh` | ✅ | ✅ | ✅ | ✅ | Universal (requires rsync) |
+| `cloudways/fix-permissions.sh` | ❌ | ❌ | ❌ | ✅ | Cloudways only |
+| `cloudways/check-ports.sh` | ⚠️ | ✅ | ⚠️ | ✅ | Linux/Cloudways |
 
 **Legend:** ✅ Fully supported | ⚠️ Partial support | ❌ Not applicable
 

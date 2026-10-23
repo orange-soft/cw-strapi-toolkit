@@ -11,38 +11,79 @@ set -o pipefail  # Exit on pipe failure
 # Define paths (same as build-and-restart.sh)
 APP_ROOT="$(pwd)"
 
-# Resolve the Cloudways master home (same as build-and-restart.sh, which exports it)
-resolve_master_home() {
+# Locate nvm and PM2 for either server type:
+# - cPanel: each site user has its own ~/.nvm and ~/.pm2 (or the legacy shared,
+#   root-owned /opt/nvm with the user's own ~/.pm2)
+# - Cloudways: every app shares the master user's ~/.nvm and ~/.pm2. Deploys log in
+#   as the app user, whose home has no nvm, so the master home is used:
+#   /home/master, or /mnt/BLOCKSTORAGE/home/master on block storage servers.
+#   Override with MASTER_HOME.
+# DEPLOY_SERVER_TYPE (cpanel|cloudways) forces the type; otherwise Cloudways is
+# detected from the app path (.../applications/<app>/... or
+# .../<server>.cloudwaysapps.com/<app>/...) and anything else is cPanel.
+# Sets NVM_DIR, PM2_HOME, NODE_HOME (the home holding them), HOSTING (cpanel|cloudways)
+# and HOSTING_SOURCE (set|detected)
+resolve_node_env() {
+    HOSTING="$(echo "${DEPLOY_SERVER_TYPE:-}" | tr '[:upper:]' '[:lower:]')"
+    HOSTING_SOURCE="set"
+    case "${HOSTING}" in
+        cpanel|cloudways) ;;
+        "")
+            HOSTING_SOURCE="detected"
+            HOSTING="cpanel"
+            case "${APP_ROOT}" in
+                */applications/*|*.cloudwaysapps.com/*) HOSTING="cloudways" ;;
+            esac
+            ;;
+        *)
+            echo "❌ Error: DEPLOY_SERVER_TYPE must be cpanel or cloudways (or unset), got: ${DEPLOY_SERVER_TYPE}"
+            exit 1
+            ;;
+    esac
+
+    # Real home of the login user: HOME may already be overridden to public_html
+    local user_home
+    user_home="$(eval echo "~$(id -un)")"
+
     local candidates=()
     [ -n "${MASTER_HOME:-}" ] && candidates+=("${MASTER_HOME}")
-    case "${APP_ROOT}" in
-        */applications/*) candidates+=("${APP_ROOT%%/applications/*}") ;;
-    esac
-    candidates+=("/home/master" "/mnt/BLOCKSTORAGE/home/master")
+    if [ "${HOSTING}" = "cloudways" ]; then
+        case "${APP_ROOT}" in
+            */applications/*) candidates+=("${APP_ROOT%%/applications/*}") ;;
+        esac
+        candidates+=("/home/master" "/mnt/BLOCKSTORAGE/home/master")
+    else
+        candidates+=("${user_home}")
+    fi
 
     local dir
+    NODE_HOME=""
     for dir in "${candidates[@]}"; do
         if [ -s "${dir}/.nvm/nvm.sh" ]; then
-            echo "${dir}"
-            return 0
+            NODE_HOME="${dir}"
+            NVM_DIR="${dir}/.nvm"
+            break
         fi
     done
-    echo "/home/master"
+    if [ -z "${NODE_HOME}" ] && [ "${HOSTING}" = "cpanel" ] && [ -s "/opt/nvm/nvm.sh" ]; then
+        NODE_HOME="${user_home}"
+        NVM_DIR="/opt/nvm"
+    fi
+    [ -n "${NODE_HOME}" ] || return 1
+
+    PM2_HOME="${NODE_HOME}/.pm2"
+    export NVM_DIR PM2_HOME NODE_HOME HOSTING HOSTING_SOURCE
 }
-MASTER_HOME="$(resolve_master_home)"
-export MASTER_HOME
 
 # Only setup environment if not already configured by parent script
 # This allows the script to be called standalone or from build-and-restart.sh
 if [ -z "${NVM_DIR:-}" ] || ! command -v nvm &> /dev/null; then
-    # Standalone mode: Use Cloudways paths (same as build-and-restart.sh)
-    export NVM_DIR="${MASTER_HOME}/.nvm"
-
-    if [ -s "$NVM_DIR/nvm.sh" ]; then
+    # Standalone mode: same nvm/PM2 lookup as build-and-restart.sh
+    if resolve_node_env; then
         \. "$NVM_DIR/nvm.sh"
     else
-        echo "❌ Error: NVM not found at $NVM_DIR/nvm.sh"
-        echo "   This script requires Node.js (installed via NVM on Cloudways)"
+        echo "❌ Error: NVM not found (${HOSTING})"
+        echo "   This script requires Node.js installed via NVM"
         exit 1
     fi
 
@@ -58,17 +99,43 @@ if [ -z "${NVM_DIR:-}" ] || ! command -v nvm &> /dev/null; then
         NODE_BIN="$(dirname "$(nvm which current 2>/dev/null || command -v node)")"
     fi
 
-    # Setup PM2 environment (same as build-and-restart.sh)
-    export PATH="${MASTER_HOME}/bin:${MASTER_HOME}/bin/npm/lib/node_modules/bin:${PATH}"
-    export PM2_HOME="${MASTER_HOME}/.pm2"
+    # Setup PM2 environment (same as build-and-restart.sh; PM2_HOME set by resolve_node_env)
+    export PATH="${NODE_HOME}/bin:${NODE_HOME}/bin/npm/lib/node_modules/bin:${PATH}"
 
     # Use per-app npm cache (set to parent of current directory = public_html)
     export NPM_CONFIG_CACHE="$(dirname "$(pwd)")/.npm"
 fi
 
+# Version of the PM2 daemon already running for this PM2_HOME, from its process
+# title ("PM2 v6.0.8: God Daemon (/home/master/.pm2)"); empty when none runs
+pm2_daemon_version() {
+    ps -eo args 2>/dev/null \
+        | grep -F "God Daemon (${PM2_HOME:-$HOME/.pm2})" \
+        | sed -n 's/^PM2 v\([0-9][0-9.]*\): God Daemon.*/\1/p' \
+        | head -n 1 || true
+}
+
+# NVM keeps global npm packages per Node version, so pm2 is missing right
+# after .nvmrc moves to a new version. Install it into the active Node, at the
+# running daemon's version: a newer CLI than the daemon prints "In-memory PM2 is
+# out-of-date" on every command (move the daemon later with `pm2 update`).
+if ! command -v pm2 &> /dev/null; then
+    PM2_VERSION="$(pm2_daemon_version)"
+    echo "📦 pm2 not found for Node $(node --version), installing pm2@${PM2_VERSION:-latest}..."
+    if ! npm install -g "pm2@${PM2_VERSION:-latest}"; then
+        echo "❌ Error: Failed to install pm2"
+        exit 1
+    fi
+fi
+
 # ecosystem.config.cjs reads process.env.NODE_BIN to pick interpreter + npm,
 # so it must be exported before any `pm2 start/restart <ecosystem>`
 export NODE_BIN="${NODE_BIN:-$(dirname "$(command -v node)")}"
+
+# Parse `pm2 jlist` output. The JSON is one line, but pm2 can print other lines
+# first (e.g. "In-memory PM2 is out-of-date" with ANSI colours), so take the last
+# line that parses as a JSON array instead of searching for the first "["
+PM2_JLIST_PARSE_JS='s => { for (const l of s.split("\n").reverse()) { const t = l.trim(); if (t.startsWith("[")) { try { return JSON.parse(t); } catch (e) {} } } return []; }'
 
 # Extract the nvm Node version (e.g. v22.23.4) from a path like
 # /home/master/.nvm/versions/node/v22.23.4/bin/node; prints nothing for non-nvm paths
@@ -97,8 +164,7 @@ running_node_versions() {
         const v = ${NODE_VERSION_FROM_PATH_JS};
         let s = '';
         process.stdin.on('data', d => s += d).on('end', () => {
-            let list = [];
-            try { list = JSON.parse(s.slice(s.indexOf('['))); } catch (e) {}
+            const list = (${PM2_JLIST_PARSE_JS})(s);
             const p = list.find(x => x.name === process.argv[1]);
             const env = (p && p.pm2_env) || {};
             for (const path of [env.exec_interpreter, env.pm_exec_path]) {
@@ -245,8 +311,7 @@ case $COMMAND in
             const installed = process.argv[1].split(/\s+/).filter(Boolean);
             let s = '';
             process.stdin.on('data', d => s += d).on('end', () => {
-                let list = [];
-                try { list = JSON.parse(s.slice(s.indexOf('['))); } catch (e) {}
+                const list = (${PM2_JLIST_PARSE_JS})(s);
                 const used = new Set();
                 const pad = (x, n) => String(x).padEnd(n);
                 console.log('   ' + pad('APP', 32) + pad('STATUS', 10) + pad('INTERPRETER', 14) + 'NPM SCRIPT');

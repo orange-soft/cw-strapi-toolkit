@@ -13,28 +13,69 @@ START_TIME=$(date +%s)
 # Define paths
 APP_ROOT="$(pwd)"
 
-# Resolve the Cloudways master home. Most servers use /home/master, but servers
-# with block storage keep it at /mnt/BLOCKSTORAGE/home/master. Prefer an explicit
-# MASTER_HOME, then the prefix of APP_ROOT (.../applications/<app>/public_html/<project>).
-resolve_master_home() {
+# Locate nvm and PM2 for either server type:
+# - cPanel: each site user has its own ~/.nvm and ~/.pm2 (or the legacy shared,
+#   root-owned /opt/nvm with the user's own ~/.pm2)
+# - Cloudways: every app shares the master user's ~/.nvm and ~/.pm2. Deploys log in
+#   as the app user, whose home has no nvm, so the master home is used:
+#   /home/master, or /mnt/BLOCKSTORAGE/home/master on block storage servers.
+#   Override with MASTER_HOME.
+# DEPLOY_SERVER_TYPE (cpanel|cloudways) forces the type; otherwise Cloudways is
+# detected from the app path (.../applications/<app>/... or
+# .../<server>.cloudwaysapps.com/<app>/...) and anything else is cPanel.
+# Sets NVM_DIR, PM2_HOME, NODE_HOME (the home holding them), HOSTING (cpanel|cloudways)
+# and HOSTING_SOURCE (set|detected)
+resolve_node_env() {
+    HOSTING="$(echo "${DEPLOY_SERVER_TYPE:-}" | tr '[:upper:]' '[:lower:]')"
+    HOSTING_SOURCE="set"
+    case "${HOSTING}" in
+        cpanel|cloudways) ;;
+        "")
+            HOSTING_SOURCE="detected"
+            HOSTING="cpanel"
+            case "${APP_ROOT}" in
+                */applications/*|*.cloudwaysapps.com/*) HOSTING="cloudways" ;;
+            esac
+            ;;
+        *)
+            echo "❌ Error: DEPLOY_SERVER_TYPE must be cpanel or cloudways (or unset), got: ${DEPLOY_SERVER_TYPE}"
+            exit 1
+            ;;
+    esac
+
+    # Real home of the login user: HOME may already be overridden to public_html
+    local user_home
+    user_home="$(eval echo "~$(id -un)")"
+
     local candidates=()
     [ -n "${MASTER_HOME:-}" ] && candidates+=("${MASTER_HOME}")
-    case "${APP_ROOT}" in
-        */applications/*) candidates+=("${APP_ROOT%%/applications/*}") ;;
-    esac
-    candidates+=("/home/master" "/mnt/BLOCKSTORAGE/home/master")
+    if [ "${HOSTING}" = "cloudways" ]; then
+        case "${APP_ROOT}" in
+            */applications/*) candidates+=("${APP_ROOT%%/applications/*}") ;;
+        esac
+        candidates+=("/home/master" "/mnt/BLOCKSTORAGE/home/master")
+    else
+        candidates+=("${user_home}")
+    fi
 
     local dir
+    NODE_HOME=""
     for dir in "${candidates[@]}"; do
         if [ -s "${dir}/.nvm/nvm.sh" ]; then
-            echo "${dir}"
-            return 0
+            NODE_HOME="${dir}"
+            NVM_DIR="${dir}/.nvm"
+            break
         fi
     done
-    echo "/home/master"
+    if [ -z "${NODE_HOME}" ] && [ "${HOSTING}" = "cpanel" ] && [ -s "/opt/nvm/nvm.sh" ]; then
+        NODE_HOME="${user_home}"
+        NVM_DIR="/opt/nvm"
+    fi
+    [ -n "${NODE_HOME}" ] || return 1
+
+    PM2_HOME="${NODE_HOME}/.pm2"
+    export NVM_DIR PM2_HOME NODE_HOME HOSTING HOSTING_SOURCE
 }
-MASTER_HOME="$(resolve_master_home)"
-export MASTER_HOME
 
 # Validate we're in the correct directory
 if [ ! -f "${APP_ROOT}/package.json" ]; then
@@ -69,13 +110,17 @@ fi
 
 echo "✅ Toolkit installation verified"
 
-# Load nvm from master user's home
-export NVM_DIR="${MASTER_HOME}/.nvm"
-if [ -s "$NVM_DIR/nvm.sh" ]; then
+# Load nvm (cPanel: the user's own; Cloudways: the master user's, shared by all apps)
+if resolve_node_env; then
     \. "$NVM_DIR/nvm.sh"
-    echo "✅ NVM loaded successfully"
+    echo "✅ NVM loaded successfully (${HOSTING}, ${HOSTING_SOURCE}: ${NVM_DIR})"
 else
-    echo "❌ Error: NVM not found at $NVM_DIR/nvm.sh"
+    echo "❌ Error: NVM not found"
+    if [ "${HOSTING}" = "cloudways" ]; then
+        echo "   Tried: ${MASTER_HOME:+${MASTER_HOME}/.nvm, }/home/master/.nvm, /mnt/BLOCKSTORAGE/home/master/.nvm"
+    else
+        echo "   Tried: ~/.nvm, /opt/nvm"
+    fi
     exit 1
 fi
 
@@ -101,6 +146,13 @@ if [ -f "${APP_ROOT}/.nvmrc" ]; then
     # Use the version
     echo "✅ Switching to Node ${NODE_VERSION}"
     nvm use "${NODE_VERSION}"
+
+    # On cPanel, make it the user's default too, so anything that only sources
+    # nvm.sh (new shells, the PM2 boot service) finds the pm2 for this Node.
+    # Cloudways nvm (and the legacy /opt/nvm) is shared, so its default is left alone.
+    if [ "${HOSTING}" = "cpanel" ] && [ "${NVM_DIR}" != "/opt/nvm" ]; then
+        nvm alias default "${NODE_VERSION}"
+    fi
 else
     echo "⚠️  No .nvmrc found, using default Node version"
 fi
@@ -111,12 +163,11 @@ NODE_BIN="$(dirname "$(nvm which current 2>/dev/null || command -v node)")"
 export NODE_BIN
 echo "📌 Resolved Node: $(node --version) at ${NODE_BIN}"
 
-# Setup PM2 environment
-export PATH="${MASTER_HOME}/bin:${MASTER_HOME}/bin/npm/lib/node_modules/bin:${PATH}"
-export PM2_HOME="${MASTER_HOME}/.pm2"
+# Setup PM2 environment (PM2_HOME was set by resolve_node_env)
+export PATH="${NODE_HOME}/bin:${NODE_HOME}/bin/npm/lib/node_modules/bin:${PATH}"
 
 # Override HOME to public_html (parent of APP_ROOT) because:
-# - App user's $HOME (/home/master/applications/appuser1/) is owned by root
+# - Cloudways app user's $HOME (/home/master/applications/appuser1/) is owned by root
 # - public_html/ is the effective home for app user (writable)
 # - Project is at public_html/gocomm-strapi/ (APP_ROOT)
 # - Strapi creates $HOME/.config/com.strapi/config.json (unique UUID per app user)
@@ -124,13 +175,14 @@ export PM2_HOME="${MASTER_HOME}/.pm2"
 export HOME="$(dirname "${APP_ROOT}")"
 
 # Use per-app npm cache to avoid permission conflicts in multi-tenant environment
-# Shared cache at /home/master/.npm causes EACCES errors when different apps
+# A shared cache (e.g. /home/master/.npm on Cloudways) causes EACCES errors when different apps
 # create cache entries with different owners/permissions
 # IMPORTANT: This must be set AFTER HOME is overridden above
 export NPM_CONFIG_CACHE="${HOME}/.npm"
 
 echo ""
 echo "🔍 Environment Info:"
+echo "   Server Type: ${HOSTING} (${HOSTING_SOURCE})"
 echo "   Working Directory: ${APP_ROOT}"
 echo "   HOME Override: ${HOME}"
 echo "   Node Version: $(node --version)"
@@ -170,7 +222,11 @@ if [ "$ENV_PERMS" != "644" ] && [ "$ENV_PERMS" != "664" ]; then
         echo "✅ .env permissions fixed"
     else
         echo "❌ Error: Cannot change .env permissions"
-        echo "   Run: bash strapi-toolkit/cloudways/init-app-permissions.sh"
+        if [ "${HOSTING}" = "cloudways" ]; then
+            echo "   Run: bash strapi-toolkit/cloudways/init-app-permissions.sh"
+        else
+            echo "   Run: chmod 644 ${APP_ROOT}/.env"
+        fi
         exit 1
     fi
 else
@@ -186,7 +242,11 @@ if [ "$APP_ROOT_GROUP" != "www-data" ] || [[ ! "$APP_ROOT_PERMS" =~ ^[27]7[57]$ 
     echo "   Current: $APP_ROOT_PERMS (group: $APP_ROOT_GROUP)"
     echo "   Recommended: 775 (group: www-data)"
     echo "   This may cause permission issues during deployment"
-    echo "   Fix by running: bash strapi-toolkit/cloudways/init-app-permissions.sh"
+    if [ "${HOSTING}" = "cloudways" ]; then
+        echo "   Fix by running: bash strapi-toolkit/cloudways/init-app-permissions.sh"
+    else
+        echo "   Fix by running: chown $(whoami):www-data ${APP_ROOT} && chmod 775 ${APP_ROOT}"
+    fi
 fi
 
 echo ""
@@ -211,7 +271,11 @@ if [ -d "${APP_ROOT}/node_modules" ]; then
         if [ -d "${APP_ROOT}/node_modules" ]; then
             echo "❌ Error: Failed to remove node_modules after retry"
             echo "   This may indicate permission issues or locked files"
-            echo "   Fix by running: bash strapi-toolkit/cloudways/init-app-permissions.sh"
+            if [ "${HOSTING}" = "cloudways" ]; then
+                echo "   Fix by running: bash strapi-toolkit/cloudways/init-app-permissions.sh"
+            else
+                echo "   Fix by running: rm -rf ${APP_ROOT}/node_modules && npm ci --omit=dev"
+            fi
             exit 1
         else
             echo "✅ node_modules removed (after retry)"
