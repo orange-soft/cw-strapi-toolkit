@@ -1,6 +1,29 @@
 #!/bin/bash
 set -e
 
+usage() {
+    echo "Usage: bash strapi-toolkit/setup/setup-env-keys.sh [--missing-only] [--yes]"
+    echo ""
+    echo "  (default)       Generate ALL secrets and replace them in .env. Only for a new"
+    echo "                  .env or a planned rotation: replacing them logs out every user,"
+    echo "                  invalidates API tokens and makes encrypted values unreadable"
+    echo "  --missing-only  Only fill in secrets that are missing, empty or still a"
+    echo "                  placeholder (tobemodified). Existing secrets are never replaced,"
+    echo "                  so it is safe on a running site"
+    echo "  --yes, -y       Don't ask before updating .env"
+}
+
+MISSING_ONLY=false
+ASSUME_YES=false
+for arg in "$@"; do
+    case "$arg" in
+        --missing-only) MISSING_ONLY=true ;;
+        --yes|-y) ASSUME_YES=true ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "❌ Unknown option: $arg"; echo ""; usage; exit 1 ;;
+    esac
+done
+
 echo "========================================"
 echo "🔑 Strapi Environment Keys Setup"
 echo "========================================"
@@ -23,6 +46,80 @@ ENV_FILE="${APP_ROOT}/.env"
 generate_key() {
     node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 }
+
+# --missing-only: fill in only absent / empty / placeholder secrets, keep the rest
+if [ "$MISSING_ONLY" = true ]; then
+    if [ ! -f "$ENV_FILE" ]; then
+        echo "❌ Error: .env not found at ${ENV_FILE}"
+        echo "   Create it first: cp .env.example .env"
+        exit 1
+    fi
+
+    SECRET_KEYS=(APP_KEYS API_TOKEN_SALT ADMIN_JWT_SECRET TRANSFER_TOKEN_SALT JWT_SECRET ENCRYPTION_KEY ADMIN_ENCRYPTION_KEY)
+
+    # Missing = no line, an empty value, or a placeholder from .env.example
+    is_missing() {
+        local value
+        value=$(grep -E "^$1=" "$ENV_FILE" | tail -n 1 | cut -d= -f2- | tr -d "\"' \r" || true)
+        [ -z "$value" ] || echo "$value" | grep -qi "tobemodified"
+    }
+
+    TO_FILL=()
+    KEPT=()
+    for key in "${SECRET_KEYS[@]}"; do
+        if is_missing "$key"; then TO_FILL+=("$key"); else KEPT+=("$key"); fi
+    done
+
+    if [ ${#TO_FILL[@]} -eq 0 ]; then
+        echo "✅ All ${#SECRET_KEYS[@]} secrets are already set in ${ENV_FILE} - nothing changed"
+        exit 0
+    fi
+
+    echo "📁 ${ENV_FILE}"
+    echo "   Will add:     ${TO_FILL[*]}"
+    echo "   Keeping as is: ${KEPT[*]:-none}"
+    echo ""
+    if [ "$ASSUME_YES" != true ]; then
+        read -p "Add the missing secrets to .env? (y/n) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Nothing changed."
+            exit 0
+        fi
+    fi
+
+    BACKUP_FILE="${ENV_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$ENV_FILE" "$BACKUP_FILE"
+
+    for key in "${TO_FILL[@]}"; do
+        if [ "$key" = "APP_KEYS" ]; then
+            value="\"$(generate_key),$(generate_key)\""
+        else
+            value="$(generate_key)"
+        fi
+        if grep -qE "^${key}=" "$ENV_FILE"; then
+            # Replace the empty/placeholder line in place
+            TMP_FILE=$(mktemp)
+            KEY="$key" VALUE="$value" awk '
+                index($0, ENVIRON["KEY"] "=") == 1 { print ENVIRON["KEY"] "=" ENVIRON["VALUE"]; next }
+                { print }
+            ' "$ENV_FILE" > "$TMP_FILE"
+            cat "$TMP_FILE" > "$ENV_FILE"
+            rm -f "$TMP_FILE"
+        else
+            # Keep the last line terminated before appending
+            [ -z "$(tail -c 1 "$ENV_FILE")" ] || echo "" >> "$ENV_FILE"
+            echo "${key}=${value}" >> "$ENV_FILE"
+        fi
+        echo "   ➕ ${key}"
+    done
+
+    echo ""
+    echo "✅ Added ${#TO_FILL[@]} secret(s); existing ones untouched"
+    echo "   Backup: ${BACKUP_FILE}"
+    echo "   Strapi reads .env at startup: bash strapi-toolkit/pm2/pm2-manager.sh restart (or the next deploy)"
+    exit 0
+fi
 
 echo "Generating cryptographically secure random keys..."
 echo ""
@@ -61,8 +158,14 @@ if [ -f "$ENV_FILE" ]; then
     echo "⚠️  WARNING: This will update your .env file!"
     echo "   A backup will be created at: ${ENV_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
     echo ""
-    read -p "Do you want to automatically update the .env file? (y/n) " -n 1 -r
-    echo
+    echo "   (to only fill in missing secrets on a running site, use --missing-only)"
+    echo ""
+    if [ "$ASSUME_YES" = true ]; then
+        REPLY=y
+    else
+        read -p "Do you want to automatically update the .env file? (y/n) " -n 1 -r
+        echo
+    fi
 
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         # Create backup
@@ -118,7 +221,7 @@ if [ -f "$ENV_FILE" ]; then
         echo ""
         echo "🔄 Next steps:"
         echo "   1. Review the updated .env file: cat .env"
-        echo "   2. Restart Strapi: pm2 restart ecosystem.config.cjs"
+        echo "   2. Restart Strapi: bash strapi-toolkit/pm2/pm2-manager.sh restart"
         echo "   3. Test admin login"
         echo ""
         echo "📌 If something goes wrong, restore from backup:"
@@ -130,7 +233,7 @@ if [ -f "$ENV_FILE" ]; then
         echo "   1. Edit your .env file: nano ${ENV_FILE}"
         echo "   2. Replace the values above"
         echo "   3. Save and exit (Ctrl+X, then Y, then Enter)"
-        echo "   4. Restart Strapi: pm2 restart ecosystem.config.cjs"
+        echo "   4. Restart Strapi: bash strapi-toolkit/pm2/pm2-manager.sh restart"
         echo ""
     fi
 else

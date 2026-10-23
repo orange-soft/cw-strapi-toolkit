@@ -494,16 +494,19 @@ JWT_SECRET=randomstring
 **Usage:**
 
 ```bash
-# Interactive mode (generates and prompts for confirmation)
+# Safe on any site: only fill in secrets that are missing, empty or still a
+# placeholder (tobemodified); existing secrets are never replaced
+bash strapi-toolkit/setup/setup-env-keys.sh --missing-only
+
+# Rotate ALL secrets (new .env, or a planned rotation): logs out every user,
+# invalidates API tokens and makes encrypted values unreadable
 bash strapi-toolkit/setup/setup-env-keys.sh
 
-# The script will:
-# 1. Generate new keys
-# 2. Show you the keys
-# 3. Ask for confirmation
-# 4. Backup existing .env
-# 5. Update .env with new keys
+# Add --yes to skip the confirmation prompt
+bash strapi-toolkit/setup/setup-env-keys.sh --missing-only --yes
 ```
+
+Secrets handled: `APP_KEYS` (two keys), `API_TOKEN_SALT`, `ADMIN_JWT_SECRET`, `TRANSFER_TOKEN_SALT`, `JWT_SECRET`, `ENCRYPTION_KEY`, `ADMIN_ENCRYPTION_KEY`. Strapi reads `.env` at startup, so restart afterwards (`bash strapi-toolkit/pm2/pm2-manager.sh restart`).
 
 **Safety Features:**
 - Backs up `.env` to `.env.backup` before changes
