@@ -9,7 +9,8 @@ set -e
 CW_MASTER_HOME=""
 for dir in /home/master /mnt/BLOCKSTORAGE/home/master; do
     if [ -s "${dir}/.nvm/nvm.sh" ]; then
-        CW_MASTER_HOME="${dir}"
+        # Real path: /home/master may be a symlink, which nvm rejects
+        CW_MASTER_HOME="$(cd "${dir}" && pwd -P)"
         break
     fi
 done

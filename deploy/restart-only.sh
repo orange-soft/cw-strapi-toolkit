@@ -77,6 +77,12 @@ resolve_node_env() {
     fi
     [ -n "${NODE_HOME}" ] || return 1
 
+    # Use real paths: on block storage servers /home/master is a symlink to
+    # /mnt/BLOCKSTORAGE/home/master, and nvm refuses to switch Node ("nvm is not
+    # compatible with the npm config prefix option") when NVM_DIR goes through it
+    NVM_DIR="$(cd "${NVM_DIR}" && pwd -P)"
+    NODE_HOME="$(cd "${NODE_HOME}" 2>/dev/null && pwd -P || echo "${NODE_HOME}")"
+
     PM2_HOME="${NODE_HOME}/.pm2"
     export NVM_DIR PM2_HOME NODE_HOME HOSTING HOSTING_SOURCE
 }

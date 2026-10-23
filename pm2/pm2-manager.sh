@@ -71,6 +71,12 @@ resolve_node_env() {
     fi
     [ -n "${NODE_HOME}" ] || return 1
 
+    # Use real paths: on block storage servers /home/master is a symlink to
+    # /mnt/BLOCKSTORAGE/home/master, and nvm refuses to switch Node ("nvm is not
+    # compatible with the npm config prefix option") when NVM_DIR goes through it
+    NVM_DIR="$(cd "${NVM_DIR}" && pwd -P)"
+    NODE_HOME="$(cd "${NODE_HOME}" 2>/dev/null && pwd -P || echo "${NODE_HOME}")"
+
     PM2_HOME="${NODE_HOME}/.pm2"
     export NVM_DIR PM2_HOME NODE_HOME HOSTING HOSTING_SOURCE
 }
@@ -107,12 +113,19 @@ if [ -z "${NVM_DIR:-}" ] || ! command -v nvm &> /dev/null; then
 fi
 
 # Version of the PM2 daemon already running for this PM2_HOME, from its process
-# title ("PM2 v6.0.8: God Daemon (/home/master/.pm2)"); empty when none runs
+# title ("PM2 v6.0.8: God Daemon (/home/master/.pm2)"); empty when none runs.
+# Compares real paths, since the daemon may have been started via a symlink
 pm2_daemon_version() {
+    local want version home
+    want="$(cd "${PM2_HOME:-$HOME/.pm2}" 2>/dev/null && pwd -P)" || return 0
     ps -eo args 2>/dev/null \
-        | grep -F "God Daemon (${PM2_HOME:-$HOME/.pm2})" \
-        | sed -n 's/^PM2 v\([0-9][0-9.]*\): God Daemon.*/\1/p' \
-        | head -n 1 || true
+        | sed -n 's/^PM2 v\([0-9][0-9.]*\): God Daemon (\(.*\))$/\1 \2/p' \
+        | while read -r version home; do
+            if [ "$(cd "${home}" 2>/dev/null && pwd -P)" = "${want}" ]; then
+                echo "${version}"
+                break
+            fi
+        done
 }
 
 # NVM keeps global npm packages per Node version, so pm2 is missing right

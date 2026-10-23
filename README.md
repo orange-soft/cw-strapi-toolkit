@@ -15,7 +15,7 @@ The same scripts run on both server types. Nothing is configured per server: the
 | PM2 | one daemon per user (`~/.pm2`) | one shared daemon (`<master home>/.pm2`) |
 | `nvm alias default` | set to `.nvmrc` on each deploy | never changed (shared by all apps) |
 
-The Cloudways master home is `/home/master`, or `/mnt/BLOCKSTORAGE/home/master` on block storage servers. Set `MASTER_HOME` to override it.
+The Cloudways master home is `/home/master`, or `/mnt/BLOCKSTORAGE/home/master` on block storage servers (where `/home/master` is a symlink to it). Set `MASTER_HOME` to override it. Scripts always load nvm through the real path: nvm refuses to switch Node ("nvm is not compatible with the npm config prefix option") when `NVM_DIR` goes through a symlink.
 
 ---
 
