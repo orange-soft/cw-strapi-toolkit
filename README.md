@@ -44,42 +44,42 @@ This toolkit installs to `./strapi-toolkit/` (current working directory) instead
 **Option 1: Use the update script (recommended)**
 ```bash
 bash strapi-toolkit/update.sh
-```
 
-**Features:**
-- Shows current and latest version
-- Displays changelog before updating
-- Ensures exact match with repository (removes deleted files, adds new files)
-- Creates automatic backup (for non-git installations)
-- Handles both git-tracked and standalone installations
-- Uses `git reset --hard` + `git clean -fd` for git installations
+# Non-interactive (CI / ssh without a terminal)
+bash strapi-toolkit/update.sh --yes
+```
 
 **Option 2: Re-run the installer**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/master/install.sh | bash
-# Will prompt to update
-```
+# Will prompt to update (the prompt reads from your terminal, not the pipe)
 
-**Option 3: Manual git pull (if .git exists)**
-```bash
-cd strapi-toolkit
-git pull origin master
+# Non-interactive
+curl -fsSL https://raw.githubusercontent.com/orange-soft/cw-strapi-toolkit/master/install.sh | bash -s -- --yes
 ```
 
 ### Update Behavior
 
+Both `update.sh` and `install.sh` update safely:
+
+1. Download the latest version into a temp dir next to the toolkit (`.strapi-toolkit-update.XXXXXX`)
+2. Verify it: required scripts present, every `*.sh` passes `bash -n`
+3. Compare with the installed copy; nothing changes if they are identical
+4. Show changed files and ask for confirmation (skip with `--yes`)
+5. Swap in with two renames; the old version is deleted only after the new one is in place
+
+**Failure safety & cleanup:**
+- Download failure, broken download, refused confirmation → installed toolkit untouched
+- Failure or Ctrl+C in the middle of the swap → previous version is moved back
+- The temp dir is removed on every exit; temp dirs left by a killed run (older than 1 hour) are removed on the next run
+- The scripts run entirely inside `main()`, so a truncated `curl | bash` download never runs half a script
+
+**Exact match with the repository:**
+- Modified files are updated, new files are added, deleted files are removed
+- No local modifications persist (intentional)
+- No `.git` folder (the parent repo would otherwise treat the toolkit as a submodule)
+
 **Why this matters:** If a script is renamed or deleted in the repository (e.g., `old-script.sh` → `new-script.sh`), a simple `git pull` would leave both files, potentially causing confusion. Our update method ensures you always have exactly what's in the repository.
-
-**Git-tracked Installation:**
-- Modified files are updated
-- New files are added
-- Deleted files are removed
-- No extra files remain
-- No local modifications persist
-
-**Non-git Installation:**
-- Complete replacement with exact repository state
-- Backup created only if NOT tracked by git (prevents clutter)
 
 ---
 
@@ -1233,7 +1233,7 @@ A: You'll need to modify `backup/export.sh` and `backup/import.sh` to use `pg_du
 A: Absolutely! Fork the repository and modify as needed. The scripts are designed to be readable and maintainable.
 
 **Q: How do I update the toolkit after installation?**
-A: Run `bash strapi-toolkit/update.sh` or re-run the installer.
+A: Run `bash strapi-toolkit/update.sh` (add `--yes` in CI) or re-run the installer.
 
 **Q: Why use PM2 instead of systemd or other process managers?**
 A: PM2 is the standard for Node.js applications and works across all environments. Cloudways uses PM2 by default.
