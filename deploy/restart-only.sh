@@ -193,6 +193,7 @@ export NPM_CONFIG_CACHE="${HOME}/.npm"
 echo ""
 echo "🔍 Environment Info:"
 echo "   Server Type: ${HOSTING} (${HOSTING_SOURCE})"
+echo "   Login User: $(id -un) on $(hostname) (groups: $(id -Gn))"
 echo "   Working Directory: ${APP_ROOT}"
 echo "   HOME Override: ${HOME}"
 echo "   Node Version: $(node --version)"
@@ -320,8 +321,8 @@ RESTART_START=$(date +%s)
 if bash "${APP_ROOT}"/strapi-toolkit/pm2/pm2-manager.sh restart; then
     RESTART_END=$(date +%s)
     RESTART_DURATION=$((RESTART_END - RESTART_START))
-    echo "✅ PM2 restarted in ${RESTART_DURATION}s"
-    echo "   Downtime: ~${RESTART_DURATION}s (graceful reload)"
+    echo "✅ PM2 restarted and Strapi serving again after ${RESTART_DURATION}s"
+    echo "   Downtime: up to ~${RESTART_DURATION}s (restart + Strapi startup)"
 else
     echo "❌ Error: PM2 restart failed"
     exit 1

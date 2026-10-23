@@ -5,7 +5,7 @@ set -o pipefail  # Exit on pipe failure
 
 # Script: PM2 Process Manager
 # Description: Manages PM2 operations (start, stop, restart, status)
-# Usage: ./pm2-manager.sh [start|stop|restart|status|delete]
+# Usage: ./pm2-manager.sh [start|stop|restart|recreate|health|status|logs|delete|node-versions|cleanup]
 # Note: Can be called directly or from other scripts (inherits parent environment)
 
 # Define paths (same as build-and-restart.sh)
@@ -233,6 +233,57 @@ verify_online() {
         echo "   Run 'bash $0 logs' to see error details"
         exit 1
     fi
+    # "online" only means PM2 launched it; Strapi may still be booting or crash
+    wait_for_health "$app_name"
+}
+
+# Port Strapi listens on: the ecosystem env PORT (PM2 sets it, and it wins over
+# .env), else PORT in .env, else Strapi's default 1337
+app_port() {
+    node -e "
+        let p = '';
+        try { p = String(((require(process.argv[1]).apps || [])[0] || {}).env?.PORT || ''); } catch (e) {}
+        if (!p) {
+            try { p = (require('fs').readFileSync('.env', 'utf8').match(/^PORT=[\"']?(\\d+)/m) || [])[1] || ''; } catch (e) {}
+        }
+        console.log(p || 1337);
+    " "${APP_ROOT}/${ECOSYSTEM_CONFIG}" 2>/dev/null || echo 1337
+}
+
+# HTTP status of Strapi's /_health on this server (0 when nothing answers)
+health_status() {
+    node -e "
+        const req = require('http').get({ host: '127.0.0.1', port: Number(process.argv[1]), path: '/_health', timeout: 3000 }, r => { console.log(r.statusCode); r.resume(); });
+        req.on('timeout', () => req.destroy());
+        req.on('error', () => console.log(0));
+    " "$1" 2>/dev/null || echo 0
+}
+
+# Wait until Strapi answers /_health with 2xx; fail with its logs otherwise.
+# STRAPI_HEALTH_TIMEOUT sets the limit in seconds (default 120, 0 skips the check)
+wait_for_health() {
+    local app_name="$1" timeout="${STRAPI_HEALTH_TIMEOUT:-120}" port http_status start elapsed
+    [ "${timeout}" = "0" ] && return 0
+    port="$(app_port)"
+    echo "⏳ Waiting for Strapi to answer http://127.0.0.1:${port}/_health (up to ${timeout}s)..."
+    start=$(date +%s)
+    while true; do
+        http_status="$(health_status "${port}")"
+        elapsed=$(( $(date +%s) - start ))
+        case "${http_status}" in
+            2??)
+                echo "✅ Strapi is serving (HTTP ${http_status}) ${elapsed}s after PM2 started it"
+                return 0
+                ;;
+        esac
+        if [ "${elapsed}" -ge "${timeout}" ]; then
+            echo "❌ Error: Strapi did not answer /_health within ${timeout}s (last HTTP status: ${http_status}, 0 = no answer)"
+            echo "📝 Last log lines for '${app_name}':"
+            pm2 logs "${app_name}" --lines 40 --nostream 2>&1 || true
+            exit 1
+        fi
+        sleep 3
+    done
 }
 
 # delete + start for this app only, so PM2 re-resolves interpreter and script paths
@@ -304,6 +355,11 @@ case $COMMAND in
             echo "🧹 Process not running, starting fresh..."
             recreate_app "$APP_NAME"
         fi
+        ;;
+
+    health)
+        # Check that Strapi answers /_health (waits up to STRAPI_HEALTH_TIMEOUT seconds)
+        wait_for_health "$(get_app_name)"
         ;;
 
     recreate)

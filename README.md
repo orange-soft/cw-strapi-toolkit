@@ -327,6 +327,7 @@ bash strapi-toolkit/deploy/build-and-restart.sh
 2. Check `.env` and the synced `dist/` (or `build/`)
 3. Install production dependencies on the server (`npm ci --omit=dev`), so native modules match the server's Node and OS
 4. Restart PM2 (recreates the process if the Node version changed)
+5. Wait until Strapi answers `http://127.0.0.1:<PORT>/_health` (up to `STRAPI_HEALTH_TIMEOUT` seconds, default 120); fail with the app's last log lines if it doesn't, so a successful deploy means Strapi is serving
 
 **Usage:**
 
@@ -364,6 +365,9 @@ bash strapi-toolkit/pm2/pm2-manager.sh stop
 
 # Restart application (graceful; recreates the process if the Node version changed)
 bash strapi-toolkit/pm2/pm2-manager.sh restart
+
+# Check Strapi answers /_health (also run automatically after restart/recreate)
+bash strapi-toolkit/pm2/pm2-manager.sh health
 
 # Delete + start current app (re-resolves Node/npm paths)
 bash strapi-toolkit/pm2/pm2-manager.sh recreate
