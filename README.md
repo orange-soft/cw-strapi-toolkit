@@ -264,7 +264,8 @@ bash strapi-toolkit/backup/import.sh --file ./strapi-backup-20241030-153045.tar.
 - **Zero-downtime deployment** - App stays running during build
 - Orchestrates full deployment process
 - NVM environment auto-detection
-- Automatic Node version switching (from `.nvmrc`)
+- Automatic Node version switching (from `.nvmrc`; `22` tracks the latest 22.x)
+- Exports the resolved Node as `NODE_BIN` so PM2 runs the same Node that built the app
 - PM2 configuration auto-detection (`.js` or `.cjs`)
 - Graceful error handling (build failures don't stop running app)
 
@@ -330,8 +331,14 @@ bash strapi-toolkit/pm2/pm2-manager.sh start
 # Stop application
 bash strapi-toolkit/pm2/pm2-manager.sh stop
 
-# Restart application (graceful)
+# Restart application (graceful; recreates the process if the Node version changed)
 bash strapi-toolkit/pm2/pm2-manager.sh restart
+
+# Delete + start current app (re-resolves Node/npm paths)
+bash strapi-toolkit/pm2/pm2-manager.sh recreate
+
+# Audit: Node version per PM2 process + nvm versions safe to uninstall (read-only)
+bash strapi-toolkit/pm2/pm2-manager.sh node-versions
 
 # Delete from PM2 (complete removal)
 bash strapi-toolkit/pm2/pm2-manager.sh delete
@@ -351,6 +358,34 @@ bash strapi-toolkit/pm2/pm2-manager.sh logs 200
 **Environment Detection Logic:**
 1. If `NVM_DIR` is set and `nvm` command exists → Use inherited environment (called from parent script)
 2. Otherwise → Standalone mode, auto-detect NVM location
+
+**Node Version Handling:**
+- `.nvmrc` may contain a major line (`22`), minor (`22.23`) or exact version (`22.23.4`), with or without `v`
+- `NODE_BIN` (directory of the resolved `node`/`npm`) is exported for `ecosystem.config.cjs`
+- PM2 remembers the resolved `npm` path from an app's *first* start, and `pm2 restart` does not update it.
+  `restart` therefore compares the running process with the config and does `delete` + `start` (current app only) when they differ
+- Warns when `ecosystem.config.cjs` hardcodes a Node version that differs from `.nvmrc`
+
+**Recommended `ecosystem.config.cjs` (no hardcoded Node version):**
+
+```js
+const path = require('path');
+// Set by deploy/build-and-restart.sh and pm2-manager.sh; falls back to the Node running the pm2 CLI
+const NVM_NODE_BIN = process.env.NODE_BIN || path.dirname(process.execPath);
+
+module.exports = {
+  apps: [{
+    // ...
+    interpreter: `${NVM_NODE_BIN}/node`,
+    script: `${NVM_NODE_BIN}/npm`,   // explicit path, so PM2 never keeps a stale npm
+    args: 'start',
+    env: {
+      PATH: `${NVM_NODE_BIN}:...`,
+      PORT: '__STRAPI_PORT__',
+    },
+  }],
+};
+```
 
 **Use Cases:**
 - Quick status checks
@@ -801,6 +836,7 @@ bash strapi-toolkit/pm2/pm2-manager.sh logs 50
 
 All scripts automatically detect:
 - **NVM location** - `$HOME/.nvm` or `/home/master/.nvm` (Cloudways)
+- **Cloudways master home** - `/home/master` or `/mnt/BLOCKSTORAGE/home/master` (block storage), from the app path; override with `MASTER_HOME`
 - **Node version** - Reads from `.nvmrc` file
 - **PM2 config** - Supports both `.js` and `.cjs` formats
 - **Operating system** - Adapts to macOS and Linux differences

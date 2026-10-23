@@ -15,8 +15,30 @@ echo ""
 START_TIME=$(date +%s)
 
 # Define paths
-MASTER_HOME="/home/master"
 APP_ROOT="$(pwd)"
+
+# Resolve the Cloudways master home. Most servers use /home/master, but servers
+# with block storage keep it at /mnt/BLOCKSTORAGE/home/master. Prefer an explicit
+# MASTER_HOME, then the prefix of APP_ROOT (.../applications/<app>/public_html/<project>).
+resolve_master_home() {
+    local candidates=()
+    [ -n "${MASTER_HOME:-}" ] && candidates+=("${MASTER_HOME}")
+    case "${APP_ROOT}" in
+        */applications/*) candidates+=("${APP_ROOT%%/applications/*}") ;;
+    esac
+    candidates+=("/home/master" "/mnt/BLOCKSTORAGE/home/master")
+
+    local dir
+    for dir in "${candidates[@]}"; do
+        if [ -s "${dir}/.nvm/nvm.sh" ]; then
+            echo "${dir}"
+            return 0
+        fi
+    done
+    echo "/home/master"
+}
+MASTER_HOME="$(resolve_master_home)"
+export MASTER_HOME
 
 # Validate we're in the correct directory
 if [ ! -f "${APP_ROOT}/package.json" ]; then
@@ -66,13 +88,14 @@ if [ -f "${APP_ROOT}/.nvmrc" ]; then
     NODE_VERSION=$(cat "${APP_ROOT}"/.nvmrc | tr -d '[:space:]')
     echo "📌 Node version required: ${NODE_VERSION}"
 
-    # Validate Node version format
-    if [[ ! $NODE_VERSION =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
-        echo "❌ Error: Invalid Node version format in .nvmrc: ${NODE_VERSION}"
+    # Validate Node version format. A major-only version (e.g. "22") tracks the
+    # latest patch release of that line, so security fixes land on the next deploy.
+    if [[ ! $NODE_VERSION =~ ^v?[0-9]+(\.[0-9]+){0,2}$ ]]; then
+        echo "❌ Error: Invalid Node version in .nvmrc: ${NODE_VERSION} (use 22, 22.23 or 22.23.4)"
         exit 1
     fi
 
-    # Install the version if not already installed
+    # Install the version if not already installed ("22" installs the latest 22.x if newer exists)
     echo "📦 Installing Node ${NODE_VERSION} (if needed)..."
     if ! nvm install "${NODE_VERSION}"; then
         echo "❌ Error: Failed to install Node ${NODE_VERSION}"
@@ -85,6 +108,12 @@ if [ -f "${APP_ROOT}/.nvmrc" ]; then
 else
     echo "⚠️  No .nvmrc found, using default Node version"
 fi
+
+# Single source of truth for the runtime Node: pm2-manager.sh and ecosystem.config.cjs
+# read NODE_BIN, so PM2 runs the same Node that installed/built the app
+NODE_BIN="$(dirname "$(nvm which current 2>/dev/null || command -v node)")"
+export NODE_BIN
+echo "📌 Resolved Node: $(node --version) at ${NODE_BIN}"
 
 # Setup PM2 environment
 export PATH="${MASTER_HOME}/bin:${MASTER_HOME}/bin/npm/lib/node_modules/bin:${PATH}"
