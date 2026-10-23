@@ -280,30 +280,74 @@ else
 fi
 
 echo ""
-echo "📦 Installing production dependencies..."
+echo "📦 Production dependencies..."
 echo "ℹ️  Build was done on GitHub Actions, but node_modules is not synced"
 echo "   (installed here so native modules match this server's Node and OS)"
-INSTALL_START=$(date +%s)
 
 # Set umask to ensure group write permissions (002 = rwxrwxr-x for directories)
 umask 002
 
-# Clean install with production dependencies only
-if ! npm ci --omit=dev --no-audit --no-fund; then
-    echo "❌ Error: npm ci failed"
-    echo "   Try running: rm -rf ${APP_ROOT}/node_modules && npm ci --omit=dev"
-    exit 1
-fi
+# node_modules is installed beside the live one and swapped in just before the
+# restart, so the running app never loses its dependencies during npm ci (~1
+# min). Most deploys only change code: then nothing is installed at all.
+DEPS_MARKER="node_modules/.deploy-deps-hash"
+DEPS_STAGING="${APP_ROOT}/.deps-staging"
+DEPS_OLD="${APP_ROOT}/.deps-old"
 
-INSTALL_END=$(date +%s)
-echo "✅ Dependencies installed in $((INSTALL_END - INSTALL_START))s"
+# Leftovers of an interrupted deploy (deploys never overlap)
+rm -rf "${DEPS_STAGING}" "${DEPS_OLD}"
 
-# Verify strapi binary exists (required for runtime)
-if [ ! -f "${APP_ROOT}/node_modules/.bin/strapi" ]; then
-    echo "❌ Error: strapi binary not found after npm ci"
-    echo "   Expected: ${APP_ROOT}/node_modules/.bin/strapi"
-    echo "   This indicates an incomplete or corrupted installation"
-    exit 1
+# Same package.json + package-lock.json + Node version + platform = same install
+DEPS_HASH="$(node -e "
+    const crypto = require('crypto'), fs = require('fs');
+    const h = crypto.createHash('sha256');
+    for (const f of ['package.json', 'package-lock.json']) h.update(fs.readFileSync(f));
+    h.update([process.version, process.platform, process.arch].join(' '));
+    console.log(h.digest('hex'));
+")"
+
+if [ -f "${APP_ROOT}/${DEPS_MARKER}" ] && [ "$(cat "${APP_ROOT}/${DEPS_MARKER}")" = "${DEPS_HASH}" ] \
+   && [ -f "${APP_ROOT}/node_modules/.bin/strapi" ]; then
+    echo "✅ Dependencies unchanged (package-lock.json and Node $(node --version)) - skipping npm ci"
+    DEPS_SWAPPED=false
+else
+    if [ -f "${APP_ROOT}/${DEPS_MARKER}" ]; then
+        echo "🔄 package.json, package-lock.json or Node changed - installing dependencies"
+    else
+        echo "🔄 No record of the installed dependencies - installing"
+    fi
+    echo "   Installing into ${DEPS_STAGING} (the app keeps running on the current node_modules)"
+    INSTALL_START=$(date +%s)
+
+    mkdir -p "${DEPS_STAGING}"
+    cp "${APP_ROOT}/package.json" "${APP_ROOT}/package-lock.json" "${DEPS_STAGING}/"
+    [ ! -f "${APP_ROOT}/.npmrc" ] || cp "${APP_ROOT}/.npmrc" "${DEPS_STAGING}/"
+
+    # --prefer-offline: use the app's npm cache first, download only what's missing
+    if ! (cd "${DEPS_STAGING}" && npm ci --omit=dev --prefer-offline --no-audit --no-fund); then
+        echo "❌ Error: npm ci failed (the app is still running on its current node_modules)"
+        rm -rf "${DEPS_STAGING}"
+        exit 1
+    fi
+
+    if [ ! -f "${DEPS_STAGING}/node_modules/.bin/strapi" ]; then
+        echo "❌ Error: strapi binary not found after npm ci"
+        echo "   Expected: ${DEPS_STAGING}/node_modules/.bin/strapi"
+        echo "   This indicates an incomplete or corrupted installation"
+        rm -rf "${DEPS_STAGING}"
+        exit 1
+    fi
+    echo "${DEPS_HASH}" > "${DEPS_STAGING}/${DEPS_MARKER}"
+    echo "✅ Dependencies installed in $(( $(date +%s) - INSTALL_START ))s"
+
+    # Two renames on the same disk: the app only sees no node_modules in between.
+    # The old copy is deleted after the restart (the old process may still load
+    # files from it until then).
+    [ ! -d "${APP_ROOT}/node_modules" ] || mv "${APP_ROOT}/node_modules" "${DEPS_OLD}"
+    mv "${DEPS_STAGING}/node_modules" "${APP_ROOT}/node_modules"
+    rm -rf "${DEPS_STAGING}"
+    echo "✅ New node_modules swapped in"
+    DEPS_SWAPPED=true
 fi
 
 echo "✅ strapi binary verified"
@@ -323,6 +367,10 @@ if bash "${APP_ROOT}"/strapi-toolkit/pm2/pm2-manager.sh restart; then
     RESTART_DURATION=$((RESTART_END - RESTART_START))
     echo "✅ PM2 restarted and Strapi serving again after ${RESTART_DURATION}s"
     echo "   Downtime: up to ~${RESTART_DURATION}s (restart + Strapi startup)"
+    if [ "${DEPS_SWAPPED}" = "true" ] && [ -d "${DEPS_OLD}" ]; then
+        rm -rf "${DEPS_OLD}"
+        echo "🧹 Removed the previous node_modules"
+    fi
 else
     echo "❌ Error: PM2 restart failed"
     exit 1

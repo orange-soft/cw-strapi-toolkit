@@ -325,7 +325,9 @@ bash strapi-toolkit/deploy/build-and-restart.sh
 **Workflow:**
 1. Load NVM and the Node version from `.nvmrc` (same detection as `build-and-restart.sh`), export `NODE_BIN`
 2. Check `.env` and the synced `dist/` (or `build/`)
-3. Install production dependencies on the server (`npm ci --omit=dev`), so native modules match the server's Node and OS
+3. Production dependencies, installed on the server so native modules match its Node and OS:
+   - Skipped when `package.json`, `package-lock.json` and the Node version are unchanged since the last install (recorded in `node_modules/.deploy-deps-hash`) — most deploys only change code
+   - Otherwise `npm ci --omit=dev --prefer-offline` runs in `.deps-staging/` while the app keeps serving from the current `node_modules`, then the two folders are swapped just before the restart. A failed install leaves the running app and its `node_modules` untouched. The previous copy is deleted after the restart
 4. Restart PM2 (recreates the process if the Node version changed)
 5. Wait until Strapi answers `http://127.0.0.1:<PORT>/_health` (up to `STRAPI_HEALTH_TIMEOUT` seconds, default 120); fail with the app's last log lines if it doesn't, so a successful deploy means Strapi is serving
 
