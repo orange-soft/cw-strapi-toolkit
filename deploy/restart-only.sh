@@ -8,7 +8,7 @@ echo "♻️  Strapi Install & Restart PM2 Script"
 echo "⏱️  Started at: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "========================================"
 echo ""
-echo "ℹ️  This script installs dependencies and restarts PM2"
+echo "ℹ️  This script swaps in production dependencies (if they changed) and restarts PM2"
 echo "   Build was already completed on GitHub Actions"
 echo ""
 
@@ -281,64 +281,94 @@ fi
 
 echo ""
 echo "📦 Production dependencies..."
-echo "ℹ️  Build was done on GitHub Actions, but node_modules is not synced"
-echo "   (installed here so native modules match this server's Node and OS)"
 
 # Set umask to ensure group write permissions (002 = rwxrwxr-x for directories)
 umask 002
 
-# node_modules is installed beside the live one and swapped in just before the
-# restart, so the running app never loses its dependencies during npm ci (~1
-# min). Most deploys only change code: then nothing is installed at all.
+# node_modules is never synced with the code. A new one is prepared beside the
+# live one and swapped in just before the restart, so the running app never
+# loses its dependencies. It comes from one of:
+#   - the deploy workflow (DEPLOY_DEPS_INSTALL=runner, its default): installed on
+#     the GitHub runner and copied into .deps-staging; the server runs no npm ci
+#   - npm ci on this server (DEPLOY_DEPS_INSTALL=server, or a manual run)
+# Most deploys only change code: then nothing is prepared at all.
+DEPS_INSTALL="$(echo "${DEPLOY_DEPS_INSTALL:-server}" | tr '[:upper:]' '[:lower:]')"
+case "${DEPS_INSTALL}" in
+    runner|server) ;;
+    *) echo "❌ Error: DEPLOY_DEPS_INSTALL must be runner or server, got: ${DEPLOY_DEPS_INSTALL}"; exit 1 ;;
+esac
 DEPS_MARKER="node_modules/.deploy-deps-hash"
 DEPS_STAGING="${APP_ROOT}/.deps-staging"
 DEPS_OLD="${APP_ROOT}/.deps-old"
 
-# Leftovers of an interrupted deploy (deploys never overlap)
-rm -rf "${DEPS_STAGING}" "${DEPS_OLD}"
-
-# Same package.json + package-lock.json + Node version + platform = same install
+# Same package.json + package-lock.json + Node ABI (NODE_MODULE_VERSION, the
+# same for every 22.x) + platform + arch = same install. The deploy workflow
+# computes this the same way on the runner.
 DEPS_HASH="$(node -e "
     const crypto = require('crypto'), fs = require('fs');
     const h = crypto.createHash('sha256');
     for (const f of ['package.json', 'package-lock.json']) h.update(fs.readFileSync(f));
-    h.update([process.version, process.platform, process.arch].join(' '));
+    h.update(['abi' + process.versions.modules, process.platform, process.arch].join(' '));
     console.log(h.digest('hex'));
 ")"
+DEPS_ABI="Node ABI $(node -p process.versions.modules), $(node --version)"
+
+# Leftover of an interrupted deploy (deploys never overlap)
+rm -rf "${DEPS_OLD}"
+
+staged_hash() {
+    cat "${DEPS_STAGING}/${DEPS_MARKER}" 2>/dev/null || true
+}
 
 if [ -f "${APP_ROOT}/${DEPS_MARKER}" ] && [ "$(cat "${APP_ROOT}/${DEPS_MARKER}")" = "${DEPS_HASH}" ] \
    && [ -f "${APP_ROOT}/node_modules/.bin/strapi" ]; then
-    echo "✅ Dependencies unchanged (package-lock.json and Node $(node --version)) - skipping npm ci"
+    echo "✅ Dependencies unchanged (package-lock.json, ${DEPS_ABI}) - nothing to install"
+    rm -rf "${DEPS_STAGING}"
     DEPS_SWAPPED=false
 else
     if [ -f "${APP_ROOT}/${DEPS_MARKER}" ]; then
-        echo "🔄 package.json, package-lock.json or Node changed - installing dependencies"
+        echo "🔄 package.json, package-lock.json or the Node ABI changed"
     else
-        echo "🔄 No record of the installed dependencies - installing"
+        echo "🔄 No record of the installed dependencies"
     fi
-    echo "   Installing into ${DEPS_STAGING} (the app keeps running on the current node_modules)"
-    INSTALL_START=$(date +%s)
 
-    mkdir -p "${DEPS_STAGING}"
-    cp "${APP_ROOT}/package.json" "${APP_ROOT}/package-lock.json" "${DEPS_STAGING}/"
-    [ ! -f "${APP_ROOT}/.npmrc" ] || cp "${APP_ROOT}/.npmrc" "${DEPS_STAGING}/"
-
-    # --prefer-offline: use the app's npm cache first, download only what's missing
-    if ! (cd "${DEPS_STAGING}" && npm ci --omit=dev --prefer-offline --no-audit --no-fund); then
-        echo "❌ Error: npm ci failed (the app is still running on its current node_modules)"
-        rm -rf "${DEPS_STAGING}"
+    if [ "$(staged_hash)" = "${DEPS_HASH}" ] && [ -f "${DEPS_STAGING}/node_modules/.bin/strapi" ]; then
+        echo "✅ Using the node_modules prepared by the deploy (installed on the GitHub runner)"
+    elif [ "${DEPS_INSTALL}" = "runner" ]; then
+        echo "❌ Error: DEPLOY_DEPS_INSTALL=runner, but ${DEPS_STAGING} holds no node_modules for this package-lock.json"
+        echo "   Expected fingerprint: ${DEPS_HASH}"
+        echo "   Found:                $(staged_hash | grep . || echo 'none')"
+        echo "   The app is still running on its current node_modules."
+        echo "   Set DEPLOY_DEPS_INSTALL=server to install on this server instead."
         exit 1
-    fi
-
-    if [ ! -f "${DEPS_STAGING}/node_modules/.bin/strapi" ]; then
-        echo "❌ Error: strapi binary not found after npm ci"
-        echo "   Expected: ${DEPS_STAGING}/node_modules/.bin/strapi"
-        echo "   This indicates an incomplete or corrupted installation"
+    else
         rm -rf "${DEPS_STAGING}"
-        exit 1
+        echo "   Installing into ${DEPS_STAGING} (the app keeps running on the current node_modules)"
+        INSTALL_START=$(date +%s)
+
+        mkdir -p "${DEPS_STAGING}"
+        cp "${APP_ROOT}/package.json" "${APP_ROOT}/package-lock.json" "${DEPS_STAGING}/"
+        [ ! -f "${APP_ROOT}/.npmrc" ] || cp "${APP_ROOT}/.npmrc" "${DEPS_STAGING}/"
+
+        # --prefer-offline: use the app's npm cache first, download only what's missing
+        if ! (cd "${DEPS_STAGING}" && npm ci --omit=dev --prefer-offline --no-audit --no-fund); then
+            echo "❌ Error: npm ci failed (the app is still running on its current node_modules)"
+            echo "   \"Killed\" above usually means the server ran out of memory;"
+            echo "   DEPLOY_DEPS_INSTALL=runner installs on the GitHub runner instead"
+            rm -rf "${DEPS_STAGING}"
+            exit 1
+        fi
+
+        if [ ! -f "${DEPS_STAGING}/node_modules/.bin/strapi" ]; then
+            echo "❌ Error: strapi binary not found after npm ci"
+            echo "   Expected: ${DEPS_STAGING}/node_modules/.bin/strapi"
+            echo "   This indicates an incomplete or corrupted installation"
+            rm -rf "${DEPS_STAGING}"
+            exit 1
+        fi
+        echo "${DEPS_HASH}" > "${DEPS_STAGING}/${DEPS_MARKER}"
+        echo "✅ Dependencies installed in $(( $(date +%s) - INSTALL_START ))s"
     fi
-    echo "${DEPS_HASH}" > "${DEPS_STAGING}/${DEPS_MARKER}"
-    echo "✅ Dependencies installed in $(( $(date +%s) - INSTALL_START ))s"
 
     # Two renames on the same disk: the app only sees no node_modules in between.
     # The old copy is deleted after the restart (the old process may still load
@@ -394,5 +424,5 @@ echo "🕐 Finished at: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "========================================"
 echo ""
 echo "ℹ️  Note: Build was completed on GitHub Actions"
-echo "   This script only installed dependencies and restarted PM2"
+echo "   This script only swapped in dependencies (if they changed) and restarted PM2"
 echo ""

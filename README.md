@@ -332,9 +332,10 @@ bash strapi-toolkit/deploy/build-and-restart.sh
 **Workflow:**
 1. Load NVM and the Node version from `.nvmrc` (same detection as `build-and-restart.sh`), export `NODE_BIN`
 2. Check `.env` and the synced `dist/` (or `build/`)
-3. Production dependencies, installed on the server so native modules match its Node and OS:
-   - Skipped when `package.json`, `package-lock.json` and the Node version are unchanged since the last install (recorded in `node_modules/.deploy-deps-hash`) — most deploys only change code
-   - Otherwise `npm ci --omit=dev --prefer-offline` runs in `.deps-staging/` while the app keeps serving from the current `node_modules`, then the two folders are swapped just before the restart. A failed install leaves the running app and its `node_modules` untouched. The previous copy is deleted after the restart
+3. Production dependencies (never synced with the code), only when `package.json`, `package-lock.json` or the Node ABI changed since the last install (fingerprint in `node_modules/.deploy-deps-hash`; the ABI is the same for every 22.x):
+   - `DEPLOY_DEPS_INSTALL=runner` (the deploy workflow's default): the workflow has already installed them on the GitHub runner and copied them into `.deps-staging/`; this script only swaps them in. It fails, leaving the app untouched, if nothing matching was staged
+   - `DEPLOY_DEPS_INSTALL=server` (or unset, e.g. a manual run): `npm ci --omit=dev --prefer-offline` into `.deps-staging/` while the app keeps serving. Needs ~1.3 GB free RAM; a "Killed" npm means the server ran out of memory
+   - Either way the new `node_modules` is swapped in just before the restart, and the previous copy deleted after it
 4. Restart PM2 (recreates the process if the Node version changed)
 5. Wait until Strapi answers `http://127.0.0.1:<PORT>/_health` (up to `STRAPI_HEALTH_TIMEOUT` seconds, default 120); fail with the app's last log lines if it doesn't, so a successful deploy means Strapi is serving
 
