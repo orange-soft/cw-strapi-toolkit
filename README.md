@@ -124,9 +124,11 @@ strapi-toolkit/
 ├── pm2/             # PM2 process management
 │   └── pm2-manager.sh         # Unified PM2 interface
 │
-└── setup/           # Environment configuration
-    ├── generate-env-keys.sh   # Generate security keys
-    └── setup-env-keys.sh      # Auto-update .env file
+├── setup/           # Environment configuration
+│   ├── generate-env-keys.sh   # Generate security keys
+│   └── setup-env-keys.sh      # Write secrets into .env (--missing-only: never replaces existing ones)
+│
+└── shell-env.sh     # source it: set up your SSH shell like the deploy (node, npm, pm2)
 ```
 
 ---
@@ -186,6 +188,25 @@ bash strapi-toolkit/pm2/pm2-manager.sh restart
 # View logs (current app only)
 bash strapi-toolkit/pm2/pm2-manager.sh logs 50
 ```
+
+### 4b. Work on the Server by Hand
+
+An SSH session doesn't have the app's Node, npm or pm2 (on Cloudways the app user even lacks Node entirely). Source `shell-env.sh` once per session:
+
+```bash
+cd ~/public_html/<project>                 # the app folder
+source strapi-toolkit/shell-env.sh         # or: source <app>/strapi-toolkit/shell-env.sh from anywhere
+node --version; npm ls @strapi/strapi; pm2 list
+```
+
+It sets up the shell exactly like the deploy scripts (same detection, `DEPLOY_SERVER_TYPE` / `MASTER_HOME` work too):
+- Node from `.nvmrc` via the right NVM — Cloudways: master's shared NVM through its real path (`/home/master` may be a symlink nvm rejects); cPanel: the user's own `~/.nvm`
+- `pm2` on `PATH` and `PM2_HOME` — Cloudways: master's shared daemon; cPanel: `~/.pm2`
+- `NODE_BIN`, so a manual `pm2 start ecosystem.config.cjs` uses the same Node as the deploy
+- `NPM_CONFIG_CACHE` and `HOME` in `public_html` (the real home is kept in `REAL_HOME`; `--keep-home` leaves `HOME` alone)
+- `LC_ALL=C.UTF-8` only if the current locale is broken (silences `manpath: can't set the locale`)
+
+It must be sourced (running it with `bash` only prints a reminder), is safe to source again, and never closes your shell on an error. On Cloudways, PM2 and NVM are shared by every app: use `pm2-manager.sh` for this app, never `pm2 delete all`, `pm2 kill`, `npm install -g` or `nvm alias default`.
 
 ### 5. Deploy Code Updates
 
