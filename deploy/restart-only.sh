@@ -244,19 +244,19 @@ else
     echo "✅ .env permissions correct ($ENV_PERMS)"
 fi
 
-# Check app root directory permissions
-APP_ROOT_PERMS=$(stat -c "%a" "${APP_ROOT}" 2>/dev/null || stat -f "%Lp" "${APP_ROOT}" 2>/dev/null)
-APP_ROOT_GROUP=$(stat -c "%G" "${APP_ROOT}" 2>/dev/null || stat -f "%Sg" "${APP_ROOT}" 2>/dev/null)
+# Check app root directory permissions (Cloudways only: the app user and the
+# master user share files through the www-data group. On cPanel the site user
+# owns everything and Apache doesn't run as www-data, so there's nothing to check)
+if [ "${HOSTING}" = "cloudways" ]; then
+    APP_ROOT_PERMS=$(stat -c "%a" "${APP_ROOT}" 2>/dev/null || stat -f "%Lp" "${APP_ROOT}" 2>/dev/null)
+    APP_ROOT_GROUP=$(stat -c "%G" "${APP_ROOT}" 2>/dev/null || stat -f "%Sg" "${APP_ROOT}" 2>/dev/null)
 
-if [ "$APP_ROOT_GROUP" != "www-data" ] || [[ ! "$APP_ROOT_PERMS" =~ ^[27]7[57]$ ]]; then
-    echo "⚠️  Warning: App directory has suboptimal permissions"
-    echo "   Current: $APP_ROOT_PERMS (group: $APP_ROOT_GROUP)"
-    echo "   Recommended: 775 (group: www-data)"
-    echo "   This may cause permission issues during deployment"
-    if [ "${HOSTING}" = "cloudways" ]; then
+    if [ "$APP_ROOT_GROUP" != "www-data" ] || [[ ! "$APP_ROOT_PERMS" =~ ^[27]7[57]$ ]]; then
+        echo "⚠️  Warning: App directory has suboptimal permissions"
+        echo "   Current: $APP_ROOT_PERMS (group: $APP_ROOT_GROUP)"
+        echo "   Recommended: 775 (group: www-data)"
+        echo "   This may cause permission issues during deployment"
         echo "   Fix by running: bash strapi-toolkit/cloudways/init-app-permissions.sh"
-    else
-        echo "   Fix by running: chown $(whoami):www-data ${APP_ROOT} && chmod 775 ${APP_ROOT}"
     fi
 fi
 
