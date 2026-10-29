@@ -290,6 +290,12 @@ if ! grep -q '"strapi"' package.json; then
 fi
 success_msg "Strapi import command verified"
 
+# Before downloading anything: the import needs this app's database settings
+if [ ! -f ".env" ]; then
+  error_exit ".env not found: this app needs its database settings before importing (start from .env.example)"
+fi
+success_msg ".env found"
+
 echo ""
 
 # Determine if using local file or downloading from URL
