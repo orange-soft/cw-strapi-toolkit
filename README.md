@@ -250,6 +250,7 @@ bash strapi-toolkit/backup/export.sh --local-only
 | `--no-media` | Leave media files out (records are still included), and skip the media bucket copy |
 | `--output DIR` | Where the local archive goes. Default `~/private_html/strapi-backups/<app>/` on servers (outside the web root, next to the pre-deploy dumps), `./backups/` on a development machine. Never inside `public/`, which the site serves |
 | `--stall-timeout=SECONDS` | Stop the export when the archive stops growing this long (default 300, `0` = never) |
+| `--print-cron` | Print the crontab line for a daily backup of this app (see below) and exit |
 
 **Servers vs development machines:** an app under `public_html/` is a server. Servers refuse to back up without the backup bucket (`--local-only` to override); a development machine keeps the archive in `./backups/` when the bucket isn't set up.
 
@@ -275,6 +276,17 @@ With these set: both buckets are checked before exporting; the archive is upload
 Nothing to install: `backup/r2-backup.cjs` uses the AWS SDK that comes with `@strapi/provider-upload-aws-s3` in the app's `node_modules` (Cloudways app users can't install software outside `public_html`). Apps without that provider can't upload.
 
 **Sites with media in R2/S3** (`@strapi/provider-upload-aws-s3` + `AWS_BUCKET`): Strapi's export would download every media file over HTTP, which is slow and can hang forever (when a CDN compresses a file, e.g. Cloudflare in front of an R2 custom domain serving SVGs, its size no longer matches `Content-Length`, the archive breaks and the export never exits). So the archive never contains their media files; after the export the media bucket is copied to `<app>/media/`. The copy never deletes in the backup; it skips files already there and copies again files replaced in the media library since (same key, newer date).
+
+**Daily backups (cron):** run `bash strapi-toolkit/backup/export.sh --print-cron` in the app folder on the server. It prints the exact line for this app, e.g.:
+
+```
+27 3 * * * cd '/home/user/public_html/reading-strapi' && bash strapi-toolkit/backup/export.sh > '/home/user/private_html/strapi-backups/reading-strapi/export.log' 2>&1 || cat '/home/user/private_html/strapi-backups/reading-strapi/export.log'
+```
+
+- cPanel: *Cron Jobs* (or `crontab -e`); Cloudways: *Application → Cron Job Management*
+- The minute is derived from the app path, so apps on one server don't all run at once
+- A successful run prints nothing; a failed one prints its log, which cron mails if a cron email is set (cPanel *Cron Email*). The last run's output is always in `export.log`
+- **Monitoring:** set `BACKUP_HEARTBEAT_URL` in `.env` to a heartbeat check (e.g. healthchecks.io, period 1 day). Every successful upload pings it; the service alerts when a ping doesn't arrive, which also catches a cron that stopped running or a server that's down. Cron email alone can't (and Cloudways cron may not send any)
 
 **Hang protection:** the export runs in the background; if the archive stops growing for `--stall-timeout` seconds, the export is stopped, the partial archive removed, and the script exits with an error. Ctrl+C stops the whole npm → node tree.
 

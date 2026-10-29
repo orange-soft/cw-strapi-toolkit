@@ -66,6 +66,7 @@ fi
 OUTPUT_DIR=""
 NO_MEDIA=false
 LOCAL_ONLY=false
+PRINT_CRON=false
 KEEP_LOCAL=false
 # Expiry of the --link download URL (empty = no link)
 LINK_EXPIRE=""
@@ -106,6 +107,10 @@ while [[ $# -gt 0 ]]; do
       LOCAL_ONLY=true
       shift
       ;;
+    --print-cron)
+      PRINT_CRON=true
+      shift
+      ;;
     --keep-local)
       KEEP_LOCAL=true
       shift
@@ -136,6 +141,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --local-only    Keep the backup on this machine, upload nothing. Servers refuse to"
       echo "                  back up without the backup bucket unless this is given"
       echo "  --no-media      Leave media files out (media library records are still included)"
+      echo "  --print-cron    Print the crontab line for a daily backup of this app, then exit"
       echo "  --keep-local    Keep the local archive after uploading it to the backup bucket"
       echo "  --link          Print a temporary download URL for the uploaded archive (valid 24h),"
       echo "                  e.g. for import.sh on another server. Anyone with the URL can"
@@ -285,6 +291,54 @@ format_duration() {
   fi
 }
 
+# Servers keep apps in public_html; anywhere else is a development machine
+if [[ "$PWD" == */public_html/* ]]; then
+  ON_SERVER=true
+  # Next to the deploy's pre-deploy dumps: outside the web root, never touched by deploys
+  DEFAULT_OUTPUT_DIR="$(eval echo "~$(id -un)")/private_html/strapi-backups/$(basename "$PWD")"
+else
+  ON_SERVER=false
+  # Ignored by git and excluded from deploy rsync
+  DEFAULT_OUTPUT_DIR="$PWD/backups"
+fi
+OUTPUT_DIR=${OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}
+
+if [ "$PRINT_CRON" = true ]; then
+  APP_DIR=$(pwd -P)
+  LOG_FILE="$DEFAULT_OUTPUT_DIR/export.log"
+  # The redirect needs the folder before the script runs
+  mkdir -p "$DEFAULT_OUTPUT_DIR" || error_exit "Cannot create $DEFAULT_OUTPUT_DIR"
+  # Spread apps on one server over the hour instead of all at 03:00
+  MINUTE=$(( $(printf '%s' "$APP_DIR" | cksum | cut -d ' ' -f 1) % 60 ))
+  COMMAND="cd '$APP_DIR' && bash strapi-toolkit/backup/export.sh > '$LOG_FILE' 2>&1 || cat '$LOG_FILE'"
+
+  echo "Daily backup of $(basename "$APP_DIR") at 03:$(printf '%02d' "$MINUTE") (server time):"
+  echo ""
+  echo "$MINUTE 3 * * * $COMMAND"
+  echo ""
+  echo "  cPanel:    Cron Jobs -> Add New Cron Job (minute $MINUTE, hour 3, command above),"
+  echo "             or crontab -e and paste the whole line. Set \"Cron Email\": cron mails"
+  echo "             the output only when a backup fails (it is quiet on success)."
+  echo "  Cloudways: Application -> Cron Job Management -> paste the whole line."
+  echo ""
+  echo "  Each run's output: $LOG_FILE"
+  if [ -n "$(env_value BACKUP_HEARTBEAT_URL)" ]; then
+    echo "  Monitoring: BACKUP_HEARTBEAT_URL is set, every successful backup pings it."
+  else
+    echo "  Monitoring: set BACKUP_HEARTBEAT_URL in .env (e.g. a healthchecks.io check,"
+    echo "  period 1 day). Every successful backup pings it, and the service alerts you"
+    echo "  when a ping doesn't arrive: a failed backup or a cron that stopped running."
+  fi
+  echo ""
+  echo "  Try it once now (same backup, output on screen):"
+  echo "    cd '$APP_DIR' && bash strapi-toolkit/backup/export.sh"
+  if [ "$ON_SERVER" = false ]; then
+    echo ""
+    warn_msg "This is not under public_html, so not a server: meant for the server's crontab"
+  fi
+  exit 0
+fi
+
 echo "========================================"
 echo "    Strapi Backup Export"
 echo "    Started at: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -319,17 +373,6 @@ if ! [[ "$STALL_TIMEOUT" =~ ^[0-9]+$ ]]; then
   error_exit "--stall-timeout must be a number of seconds (0 = never): $STALL_TIMEOUT"
 fi
 
-# Servers keep apps in public_html; anywhere else is a development machine
-if [[ "$PWD" == */public_html/* ]]; then
-  ON_SERVER=true
-  # Next to the deploy's pre-deploy dumps: outside the web root, never touched by deploys
-  DEFAULT_OUTPUT_DIR="$(eval echo "~$(id -un)")/private_html/strapi-backups/$(basename "$PWD")"
-else
-  ON_SERVER=false
-  # Ignored by git and excluded from deploy rsync
-  DEFAULT_OUTPUT_DIR="$PWD/backups"
-fi
-OUTPUT_DIR=${OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}
 
 # Media stored in R2/S3: Strapi's export would download every file over HTTP and
 # can hang forever, so these sites export the database only and copy the bucket
@@ -593,3 +636,13 @@ if [ -n "${DOWNLOAD_URL:-}" ]; then
 fi
 echo "========================================"
 echo ""
+
+# Monitoring: the service alerts when this ping doesn't arrive in time
+HEARTBEAT_URL=$(env_value BACKUP_HEARTBEAT_URL)
+if [ "$UPLOAD" = true ] && [ -n "$HEARTBEAT_URL" ]; then
+  if curl -fsS -m 10 --retry 3 -o /dev/null "$HEARTBEAT_URL"; then
+    success_msg "Heartbeat sent"
+  else
+    warn_msg "Could not send the heartbeat to BACKUP_HEARTBEAT_URL (the backup itself succeeded)"
+  fi
+fi
