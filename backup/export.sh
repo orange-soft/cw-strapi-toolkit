@@ -64,6 +64,12 @@ fi
 
 # Default configuration
 OUTPUT_DIR="."
+NO_MEDIA=false
+KEEP_LOCAL=false
+# Expiry of the --link download URL (empty = no link)
+LINK_EXPIRE=""
+# Seconds without the archive growing before the export counts as hung (0 = never)
+STALL_TIMEOUT=300
 
 # Color codes for output (if terminal supports it)
 if [ -t 1 ]; then
@@ -91,17 +97,58 @@ while [[ $# -gt 0 ]]; do
       OUTPUT_DIR="$2"
       shift 2
       ;;
+    --no-media)
+      NO_MEDIA=true
+      shift
+      ;;
+    --keep-local)
+      KEEP_LOCAL=true
+      shift
+      ;;
+    --link)
+      LINK_EXPIRE=24h
+      shift
+      ;;
+    --link=*)
+      LINK_EXPIRE="${1#*=}"
+      shift
+      ;;
+    --stall-timeout=*)
+      STALL_TIMEOUT="${1#*=}"
+      shift
+      ;;
+    --stall-timeout)
+      STALL_TIMEOUT="$2"
+      shift 2
+      ;;
     -h|--help)
       echo "Usage: $0 [OPTIONS]"
       echo ""
       echo "Options:"
       echo "  --output=DIR    Specify output directory for backup (default: current directory)"
       echo "  --output DIR    Alternative syntax for output directory"
+      echo "  --no-media      Local backup without media files (database, media library records"
+      echo "                  and config only). Nothing is uploaded to the backup bucket."
+      echo "  --keep-local    Keep the local archive after uploading it to the backup bucket"
+      echo "  --link          Print a temporary download URL for the uploaded archive (valid 24h),"
+      echo "                  e.g. for import.sh on another server. Anyone with the URL can"
+      echo "                  download the database until it expires."
+      echo "  --link=DURATION Same, with another expiry (e.g. 1h, 3d; at most 7d)"
+      echo "  --stall-timeout=SECONDS"
+      echo "                  Stop the export if the archive stops growing for this long"
+      echo "                  (default: 300, 0 = never)"
       echo "  -h, --help      Show this help message"
       echo ""
       echo "Example:"
       echo "  $0 --output=./public"
       echo "  $0 --output ./backups"
+      echo "  $0 --no-media --output ./backups"
+      echo ""
+      echo "Remote backups (BACKUP_R2_* in .env, see .env.example):"
+      echo "  The archive is uploaded to <BACKUP_R2_BUCKET>/<app>/db/ and removed locally."
+      echo "  Sites with R2/S3 media export the database only and copy the media bucket"
+      echo "  to <BACKUP_R2_BUCKET>/<app>/media/ instead. They refuse to run without"
+      echo "  BACKUP_R2_*, unless --no-media is given."
       exit 0
       ;;
     *)
@@ -159,6 +206,77 @@ format_bytes() {
   fi
 }
 
+# File size in bytes (0 if missing); wc works the same on macOS and Linux
+file_size() {
+  if [ -f "$1" ]; then
+    wc -c < "$1" | tr -d ' '
+  else
+    echo 0
+  fi
+}
+
+# Print a process and all its descendants (npm -> sh -> node strapi)
+process_tree() {
+  local pid=$1 child
+  echo "$pid"
+  for child in $(pgrep -P "$pid" 2>/dev/null); do
+    process_tree "$child"
+  done
+}
+
+# Stop the running export: TERM first, KILL whatever is left after 10s
+stop_export() {
+  local pids pid alive i
+  pids=$(process_tree "$EXPORT_PID")
+  kill -TERM $pids 2>/dev/null || true
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    alive=false
+    for pid in $pids; do
+      kill -0 "$pid" 2>/dev/null && alive=true
+    done
+    [ "$alive" = false ] && return
+    sleep 1
+  done
+  kill -KILL $pids 2>/dev/null || true
+}
+
+# Value from the environment, else from .env (quotes stripped), like Strapi reads it
+env_value() {
+  local key=$1
+  if [ -n "${!key:-}" ]; then
+    echo "${!key}"
+    return
+  fi
+  [ -f .env ] || return 0
+  grep -E "^${key}=" .env | tail -n 1 | cut -d '=' -f 2- | tr -d '"' | tr -d "'"
+}
+
+# rclone from PATH, else from the login user's ~/bin (installed without root)
+find_rclone() {
+  local login_home
+  if command -v rclone &> /dev/null; then
+    command -v rclone
+    return
+  fi
+  login_home=$(eval echo "~$(id -un)")
+  if [ -x "${login_home}/bin/rclone" ]; then
+    echo "${login_home}/bin/rclone"
+  fi
+}
+
+# Run rclone with the RCLONE_CONFIG_* remotes defined in this script
+rclone_cmd() {
+  (
+    export ${!RCLONE_CONFIG_@}
+    "$RCLONE" "$@"
+  )
+}
+
+# Remove the half-written archive of this run
+remove_partial_archive() {
+  rm -f "${BACKUP_FILENAME}.tar.gz" "${BACKUP_FILENAME}.tar"
+}
+
 # Format seconds to human readable
 format_duration() {
   local seconds=$1
@@ -202,6 +320,115 @@ if ! grep -q '"strapi"' package.json; then
 fi
 success_msg "Strapi export command verified"
 
+if ! [[ "$STALL_TIMEOUT" =~ ^[0-9]+$ ]]; then
+  error_exit "--stall-timeout must be a number of seconds (0 = never): $STALL_TIMEOUT"
+fi
+
+# Media stored in R2/S3: Strapi's export would download every file over HTTP and
+# can hang forever, so these sites export the database only and copy the bucket
+MEDIA_BUCKET=$(env_value AWS_BUCKET)
+REMOTE_MEDIA=false
+if grep -q '"@strapi/provider-upload-aws-s3"' package.json && [ -n "$MEDIA_BUCKET" ]; then
+  REMOTE_MEDIA=true
+fi
+
+BACKUP_R2_ENDPOINT=$(env_value BACKUP_R2_ENDPOINT)
+BACKUP_R2_ACCESS_KEY_ID=$(env_value BACKUP_R2_ACCESS_KEY_ID)
+BACKUP_R2_SECRET_ACCESS_KEY=$(env_value BACKUP_R2_SECRET_ACCESS_KEY)
+BACKUP_R2_BUCKET=$(env_value BACKUP_R2_BUCKET)
+BACKUP_R2_BUCKET=${BACKUP_R2_BUCKET:-strapi-backup}
+BACKUP_APP_NAME=$(env_value BACKUP_APP_NAME)
+BACKUP_APP_NAME=${BACKUP_APP_NAME:-$(basename "$PWD")}
+
+if [ -n "$LINK_EXPIRE" ]; then
+  if ! [[ "$LINK_EXPIRE" =~ ^[0-9]+[smhd]$ ]]; then
+    error_exit "--link expiry must look like 30m, 24h or 7d: $LINK_EXPIRE"
+  fi
+  if [ "$NO_MEDIA" = true ]; then
+    error_exit "--link needs an uploaded backup, but --no-media only makes a local one"
+  fi
+fi
+
+MISSING_BACKUP_VARS=()
+for var in BACKUP_R2_ENDPOINT BACKUP_R2_ACCESS_KEY_ID BACKUP_R2_SECRET_ACCESS_KEY; do
+  [ -n "${!var}" ] || MISSING_BACKUP_VARS+=("$var")
+done
+
+UPLOAD=false
+EXCLUDE_MEDIA=false
+if [ "$NO_MEDIA" = true ]; then
+  EXCLUDE_MEDIA=true
+  info_msg "--no-media: local backup only, nothing is uploaded"
+elif [ ${#MISSING_BACKUP_VARS[@]} -eq 0 ]; then
+  UPLOAD=true
+  [ "$REMOTE_MEDIA" = true ] && EXCLUDE_MEDIA=true
+elif [ ${#MISSING_BACKUP_VARS[@]} -lt 3 ] || [ "$REMOTE_MEDIA" = true ]; then
+  # Half-configured, or R2 media with nowhere to back it up to
+  echo ""
+  if [ "$REMOTE_MEDIA" = true ]; then
+    echo -e "${RED}[✗] This site stores its media in R2/S3 (bucket: ${MEDIA_BUCKET}), so its backup${NC}"
+    echo -e "${RED}    goes to the remote backup bucket, which is not set up in .env.${NC}"
+  else
+    echo -e "${RED}[✗] The remote backup bucket is only partly set up in .env.${NC}"
+  fi
+  echo -e "${RED}    Missing: ${MISSING_BACKUP_VARS[*]} (see .env.example)${NC}"
+  echo ""
+  echo "    Or make a local backup without media files:"
+  echo "      bash ${BASH_SOURCE[0]} --no-media"
+  exit 1
+else
+  [ -n "$LINK_EXPIRE" ] && error_exit "--link needs the remote backup bucket (BACKUP_R2_* in .env, see .env.example)"
+  info_msg "BACKUP_R2_* not set in .env: the backup stays on this server"
+fi
+
+if [ "$UPLOAD" = true ]; then
+  RCLONE=$(find_rclone)
+  if [ -z "$RCLONE" ]; then
+    error_exit "rclone is needed to upload the backup. Install it without root:
+    curl -fsSLO https://downloads.rclone.org/rclone-current-linux-amd64.zip
+    unzip -j rclone-current-linux-amd64.zip '*/rclone' -d ~/bin && rm rclone-current-linux-amd64.zip"
+  fi
+  success_msg "rclone found: $RCLONE"
+
+  # rclone remotes from environment variables, no rclone.conf needed. Set but
+  # not exported here: rclone_cmd exports them for rclone only, so the Strapi
+  # export never gets the backup credentials in its environment.
+  RCLONE_CONFIG_BACKUP_TYPE=s3
+  RCLONE_CONFIG_BACKUP_PROVIDER=Cloudflare
+  RCLONE_CONFIG_BACKUP_ENDPOINT="$BACKUP_R2_ENDPOINT"
+  RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID="$BACKUP_R2_ACCESS_KEY_ID"
+  RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY="$BACKUP_R2_SECRET_ACCESS_KEY"
+  # A token scoped to one bucket can't list or create buckets
+  RCLONE_CONFIG_BACKUP_NO_CHECK_BUCKET=true
+  BACKUP_REMOTE="backup:${BACKUP_R2_BUCKET}/${BACKUP_APP_NAME}"
+
+  # Fail now on wrong credentials, not after the export
+  rclone_cmd lsf "backup:${BACKUP_R2_BUCKET}" --max-depth 1 > /dev/null \
+    || error_exit "Cannot access the backup bucket ${BACKUP_R2_BUCKET} (check BACKUP_R2_* in .env)"
+  success_msg "Backup bucket reachable: ${BACKUP_R2_BUCKET}/${BACKUP_APP_NAME}/"
+
+  if [ "$REMOTE_MEDIA" = true ]; then
+    MEDIA_ENDPOINT=$(env_value AWS_ENDPOINT)
+    RCLONE_CONFIG_MEDIA_TYPE=s3
+    RCLONE_CONFIG_MEDIA_ACCESS_KEY_ID="$(env_value AWS_ACCESS_KEY_ID)"
+    RCLONE_CONFIG_MEDIA_SECRET_ACCESS_KEY="$(env_value AWS_SECRET_ACCESS_KEY)"
+    RCLONE_CONFIG_MEDIA_NO_CHECK_BUCKET=true
+    if [ -z "$MEDIA_ENDPOINT" ]; then
+      RCLONE_CONFIG_MEDIA_PROVIDER=AWS
+      RCLONE_CONFIG_MEDIA_REGION="$(env_value AWS_REGION)"
+    elif [[ "$MEDIA_ENDPOINT" == *r2.cloudflarestorage.com* ]]; then
+      RCLONE_CONFIG_MEDIA_PROVIDER=Cloudflare
+      RCLONE_CONFIG_MEDIA_ENDPOINT="$MEDIA_ENDPOINT"
+    else
+      RCLONE_CONFIG_MEDIA_PROVIDER=Other
+      RCLONE_CONFIG_MEDIA_ENDPOINT="$MEDIA_ENDPOINT"
+    fi
+    rclone_cmd lsf "media:${MEDIA_BUCKET}" --max-depth 1 > /dev/null \
+      || error_exit "Cannot access the media bucket ${MEDIA_BUCKET} (check AWS_* in .env)"
+    success_msg "Media bucket reachable: ${MEDIA_BUCKET}"
+  fi
+fi
+
 # Handle output directory
 if [ "$OUTPUT_DIR" != "." ]; then
   info_msg "Output directory: $OUTPUT_DIR"
@@ -229,8 +456,52 @@ echo ""
 info_msg "Starting backup export..."
 echo ""
 
-# Run the export
-npm run strapi export -- -f "$BACKUP_FILENAME" --no-encrypt || error_exit "Backup export failed"
+EXPORT_ARGS=(-f "$BACKUP_FILENAME" --no-encrypt)
+if [ "$EXCLUDE_MEDIA" = true ]; then
+  # Media library records still go into the archive (entities stage), only the files are left out
+  EXPORT_ARGS+=(--exclude files)
+  if [ "$NO_MEDIA" = true ]; then
+    warn_msg "--no-media: media files are not in this backup, back them up separately"
+  else
+    info_msg "Exporting the database only, the media bucket is copied after the export"
+  fi
+  echo ""
+fi
+
+# Run the export in the background so a hung export can be detected.
+# Strapi can hang forever without exiting (e.g. a remote media file whose
+# downloaded size differs from its Content-Length breaks the archive), so watch
+# the archive: if it stops growing for STALL_TIMEOUT seconds, stop the export.
+npm run strapi export -- "${EXPORT_ARGS[@]}" &
+EXPORT_PID=$!
+trap 'echo ""; warn_msg "Interrupted, stopping the export..."; stop_export; remove_partial_archive; exit 130' INT TERM
+
+LAST_SIZE=-1
+LAST_GROWTH=$(date +%s)
+while kill -0 "$EXPORT_PID" 2>/dev/null; do
+  sleep 5
+  SIZE=$(( $(file_size "${BACKUP_FILENAME}.tar.gz") + $(file_size "${BACKUP_FILENAME}.tar") ))
+  NOW=$(date +%s)
+  if [ "$SIZE" -ne "$LAST_SIZE" ]; then
+    LAST_SIZE=$SIZE
+    LAST_GROWTH=$NOW
+  elif [ "$STALL_TIMEOUT" -gt 0 ] && [ $((NOW - LAST_GROWTH)) -ge "$STALL_TIMEOUT" ]; then
+    echo ""
+    warn_msg "No progress for $(format_duration "$STALL_TIMEOUT"), stopping the export..."
+    stop_export
+    wait "$EXPORT_PID" 2>/dev/null || true
+    remove_partial_archive
+    if [ "$EXCLUDE_MEDIA" = true ]; then
+      error_exit "Backup export hung (no progress for $(format_duration "$STALL_TIMEOUT")). See the Strapi errors above."
+    fi
+    error_exit "Backup export hung (no progress for $(format_duration "$STALL_TIMEOUT")). If the errors above mention assets, retry with --no-media and back up the media separately."
+  fi
+done
+
+EXPORT_STATUS=0
+wait "$EXPORT_PID" || EXPORT_STATUS=$?
+trap - INT TERM
+[ "$EXPORT_STATUS" -eq 0 ] || error_exit "Backup export failed"
 
 echo ""
 info_msg "Verifying backup file..."
@@ -259,21 +530,82 @@ if [ ! -f "$BACKUP_PATH" ]; then
 fi
 
 # Get backup file size
-BACKUP_SIZE=$(stat -f%z "$BACKUP_PATH" 2>/dev/null || stat -c%s "$BACKUP_PATH" 2>/dev/null)
+BACKUP_SIZE=$(file_size "$BACKUP_PATH")
 BACKUP_SIZE_FORMATTED=$(format_bytes $BACKUP_SIZE)
+
+success_msg "Backup archive created: $BACKUP_PATH ($BACKUP_SIZE_FORMATTED)"
+
+REMOTE_DB_PATH=""
+if [ "$UPLOAD" = true ]; then
+  REMOTE_DB_PATH="${BACKUP_REMOTE}/db/${BACKUP_FILE}"
+  echo ""
+  info_msg "Uploading to ${BACKUP_R2_BUCKET}/${BACKUP_APP_NAME}/db/${BACKUP_FILE}..."
+  rclone_cmd copyto "$BACKUP_PATH" "$REMOTE_DB_PATH" \
+    || error_exit "Upload failed, the backup is still at: $BACKUP_PATH"
+
+  # Compare checksums before removing the only local copy
+  LOCAL_MD5=$(rclone_cmd md5sum "$BACKUP_PATH" | cut -d ' ' -f 1)
+  REMOTE_MD5=$(rclone_cmd md5sum "$REMOTE_DB_PATH" | cut -d ' ' -f 1)
+  if [ -z "$LOCAL_MD5" ] || [ "$LOCAL_MD5" != "$REMOTE_MD5" ]; then
+    error_exit "Uploaded backup does not match the local file (md5 ${LOCAL_MD5:-?} vs ${REMOTE_MD5:-?}), keeping: $BACKUP_PATH"
+  fi
+  success_msg "Upload verified (md5 $LOCAL_MD5)"
+
+  if [ "$KEEP_LOCAL" = false ]; then
+    rm -f "$BACKUP_PATH"
+    info_msg "Local archive removed (use --keep-local to keep it)"
+  fi
+
+  DOWNLOAD_URL=""
+  if [ -n "$LINK_EXPIRE" ]; then
+    # Presigned URL: works without credentials until it expires (S3 allows at most 7 days)
+    DOWNLOAD_URL=$(rclone_cmd link "$REMOTE_DB_PATH" --expire "$LINK_EXPIRE") \
+      || warn_msg "Could not create the download link, the backup itself is uploaded"
+  fi
+
+  if [ "$REMOTE_MEDIA" = true ]; then
+    # After the database export, so every file the backup refers to is copied.
+    # copy never deletes in the backup; unchanged files are skipped (md5 from the listing)
+    echo ""
+    info_msg "Copying media ${MEDIA_BUCKET} -> ${BACKUP_R2_BUCKET}/${BACKUP_APP_NAME}/media/..."
+    rclone_cmd copy "media:${MEDIA_BUCKET}" "${BACKUP_REMOTE}/media" \
+      --checksum --fast-list --transfers 8 \
+      --stats 30s --stats-one-line --stats-log-level NOTICE \
+      || error_exit "Media copy failed. The database backup is uploaded; re-run to retry (copied files are skipped)."
+    success_msg "Media copied"
+  fi
+fi
 
 END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))
 DURATION_FORMATTED=$(format_duration $DURATION)
 
+echo ""
 success_msg "Backup completed successfully!"
 
 echo ""
 echo "========================================"
 echo "    Backup Details"
 echo "========================================"
-echo "Location: $BACKUP_PATH"
+if [ "$UPLOAD" = true ]; then
+  echo "Remote: ${BACKUP_R2_BUCKET}/${BACKUP_APP_NAME}/db/${BACKUP_FILE}"
+  [ "$KEEP_LOCAL" = true ] && echo "Local: $BACKUP_PATH"
+else
+  echo "Location: $BACKUP_PATH"
+fi
 echo "Size: $BACKUP_SIZE_FORMATTED"
 echo "Duration: $DURATION_FORMATTED"
+if [ "$NO_MEDIA" = true ]; then
+  echo "Media: not included (--no-media)"
+elif [ "$UPLOAD" = true ] && [ "$REMOTE_MEDIA" = true ]; then
+  echo "Media: ${BACKUP_R2_BUCKET}/${BACKUP_APP_NAME}/media/"
+fi
+if [ -n "${DOWNLOAD_URL:-}" ]; then
+  echo ""
+  echo "Download (valid ${LINK_EXPIRE}, anyone with this URL can download the backup):"
+  echo "$DOWNLOAD_URL"
+  echo ""
+  echo "Restore on another server: bash strapi-toolkit/backup/import.sh, then paste the URL"
+fi
 echo "========================================"
 echo ""

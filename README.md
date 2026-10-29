@@ -248,12 +248,60 @@ bash strapi-toolkit/backup/export.sh
 # Direct mode with specific output directory
 bash strapi-toolkit/backup/export.sh --output ./backups
 
+# Local backup without media files, nothing uploaded
+bash strapi-toolkit/backup/export.sh --no-media --output ./backups
+
+# Upload to the backup bucket but keep the local archive too
+bash strapi-toolkit/backup/export.sh --keep-local
+
+# Also print a temporary download URL (24h; --link=1h for another expiry, max 7d)
+bash strapi-toolkit/backup/export.sh --link
+
 # Creates file like: strapi-backup-20241030-153045.tar.gz
 ```
 
 **What's Included in Backup:**
 - `.tmp/data.db` (SQLite database)
 - `public/uploads/*` (all uploaded media files)
+
+**Remote backups (`BACKUP_R2_*` in `.env`):**
+One R2 bucket (default `strapi-backup`) holds the backups of all apps, one folder per app (`BACKUP_APP_NAME`, default: the app's directory name):
+
+```
+strapi-backup/
+└── reading-strapi/
+    ├── db/backup-1793268008.tar.gz   # Strapi export archive
+    └── media/                         # copy of the app's media bucket (R2/S3 sites)
+```
+
+```bash
+BACKUP_R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+BACKUP_R2_ACCESS_KEY_ID=          # token scoped to the backup bucket, not the media keys
+BACKUP_R2_SECRET_ACCESS_KEY=
+BACKUP_R2_BUCKET=strapi-backup    # optional
+BACKUP_APP_NAME=                  # optional
+```
+
+With these set, the archive is exported locally, uploaded to `<app>/db/`, checked (md5 of the local file vs the uploaded one) and then removed locally (`--keep-local` keeps it). If the upload fails or doesn't match, the local archive is kept and the script exits with an error. Old archives are not pruned: use an R2 lifecycle rule on `*/db/`.
+
+**Getting the archive back:** the bucket is private. Download it from the Cloudflare dashboard (R2 → bucket → `<app>/db/`), with `rclone`, or run the export with `--link`: it prints a presigned URL that works without credentials until it expires, ready to paste into `import.sh` on another server. Anyone with that URL can download the whole database (including admin accounts) until then, so don't post it where it stays around.
+
+Needs [rclone](https://rclone.org) (configured from `.env` by the script, no `rclone.conf`). Without root:
+
+```bash
+curl -fsSLO https://downloads.rclone.org/rclone-current-linux-amd64.zip
+unzip -j rclone-current-linux-amd64.zip '*/rclone' -d ~/bin && rm rclone-current-linux-amd64.zip
+```
+
+**Sites with media in R2/S3** (`@strapi/provider-upload-aws-s3` + `AWS_BUCKET`):
+Strapi's export downloads every media file over HTTP into the archive. That is slow, and it can hang forever: when a CDN compresses files (e.g. Cloudflare in front of an R2 custom domain serving SVGs) the downloaded size no longer matches `Content-Length`, the archive breaks and the export never exits. So these sites export the database only (`--exclude files`; media library records are still included) and, after the export, `rclone copy` the media bucket to `<app>/media/`. The copy never deletes anything in the backup and skips files that are already there.
+
+These sites **refuse to run without `BACKUP_R2_*`** and print the `--no-media` command instead: a local backup without media files, nothing uploaded. Sites with media in `public/uploads` keep working without `BACKUP_R2_*` (full archive, stays on the server).
+
+**Restoring an R2/S3 site:** download the archive from `<app>/db/` and run `import.sh --file` (it leaves the media alone, see below). Copy back missing media with `rclone copy` from `<app>/media/` to the media bucket.
+
+**Hang protection (`--stall-timeout`):**
+If the archive stops growing for 300 seconds (default), the export is stopped, the partial archive removed, and the script exits with an error. `--stall-timeout=SECONDS` changes the limit, `0` turns it off.
 
 **Use Cases:**
 - Before major updates or migrations
@@ -286,6 +334,7 @@ bash strapi-toolkit/backup/import.sh --file ./strapi-backup-20241030-153045.tar.
 
 **Safety Features:**
 - Creates backup of current data before import
+- Backups without media files (`export.sh --no-media`) are imported with `--exclude files`, so existing media (local uploads or R2/S3 objects) is never deleted
 - Validates archive structure
 - Atomic operation (all-or-nothing)
 

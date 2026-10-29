@@ -381,6 +381,20 @@ fi
 # Get the import filename
 IMPORT_FILENAME=$(basename "$IMPORT_FILE")
 
+# A backup made with export.sh --no-media has no media files. Importing it
+# normally would make Strapi delete every existing media file first (through
+# the upload provider, so R2/S3 objects too) and restore none, so leave media
+# alone instead. The media library records are still restored.
+IMPORT_ARGS=(-f "$IMPORT_FILENAME" --force)
+if [[ "$IMPORT_FILENAME" == *.tar ]]; then
+  if tar -tf "$IMPORT_FILE" 2>/dev/null | grep -q '^assets/uploads/'; then
+    info_msg "Backup includes media files (existing media will be replaced)"
+  else
+    warn_msg "Backup has no media files: importing with --exclude files, existing media is left untouched"
+    IMPORT_ARGS+=(--exclude files)
+  fi
+fi
+
 # Ensure the file is in the current working directory for Strapi to find it
 CURRENT_DIR=$(pwd)
 TARGET_FILE="$CURRENT_DIR/$IMPORT_FILENAME"
@@ -663,7 +677,7 @@ echo ""
 # Run the import with DATA_IMPORT_MODE for extended MySQL lock timeout
 # This sets innodb_lock_wait_timeout to 900 seconds for long-running transactions
 # Note: Setting the variable inline ensures it ONLY applies to this command
-DATA_IMPORT_MODE=true npm run strapi import -- -f "$IMPORT_FILENAME" --force || {
+DATA_IMPORT_MODE=true npm run strapi import -- "${IMPORT_ARGS[@]}" || {
   echo ""
   error_exit "Backup import failed. Restore from: $BACKUP_FILE"
 }
