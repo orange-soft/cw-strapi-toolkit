@@ -284,21 +284,16 @@ BACKUP_APP_NAME=                  # optional
 
 With these set, the archive is exported locally, uploaded to `<app>/db/`, checked (md5 of the local file vs the uploaded one) and then removed locally (`--keep-local` keeps it). If the upload fails or doesn't match, the local archive is kept and the script exits with an error. Old archives are not pruned: use an R2 lifecycle rule on `*/db/`.
 
-**Getting the archive back:** the bucket is private. Download it from the Cloudflare dashboard (R2 → bucket → `<app>/db/`), with `rclone`, or run the export with `--link`: it prints a presigned URL that works without credentials until it expires, ready to paste into `import.sh` on another server. Anyone with that URL can download the whole database (including admin accounts) until then, so don't post it where it stays around.
+**Getting the archive back:** the bucket is private. Download it from the Cloudflare dashboard (R2 → bucket → `<app>/db/`) or run the export with `--link`: it prints a presigned URL that works without credentials until it expires, ready to paste into `import.sh` on another server. Anyone with that URL can download the whole database (including admin accounts) until then, so don't post it where it stays around.
 
-Needs [rclone](https://rclone.org) (configured from `.env` by the script, no `rclone.conf`). Without root:
-
-```bash
-curl -fsSLO https://downloads.rclone.org/rclone-current-linux-amd64.zip
-unzip -j rclone-current-linux-amd64.zip '*/rclone' -d ~/bin && rm rclone-current-linux-amd64.zip
-```
+Nothing to install: `backup/r2-backup.cjs` does the uploads with the AWS SDK the app already has (it comes with `@strapi/provider-upload-aws-s3`), so it works for Cloudways app users, who can't install software outside `public_html`. The app must have that provider in its `node_modules`.
 
 **Sites with media in R2/S3** (`@strapi/provider-upload-aws-s3` + `AWS_BUCKET`):
-Strapi's export downloads every media file over HTTP into the archive. That is slow, and it can hang forever: when a CDN compresses files (e.g. Cloudflare in front of an R2 custom domain serving SVGs) the downloaded size no longer matches `Content-Length`, the archive breaks and the export never exits. So these sites export the database only (`--exclude files`; media library records are still included) and, after the export, `rclone copy` the media bucket to `<app>/media/`. The copy never deletes anything in the backup and skips files that are already there.
+Strapi's export downloads every media file over HTTP into the archive. That is slow, and it can hang forever: when a CDN compresses files (e.g. Cloudflare in front of an R2 custom domain serving SVGs) the downloaded size no longer matches `Content-Length`, the archive breaks and the export never exits. So these sites export the database only (`--exclude files`; media library records are still included) and, after the export, copy the media bucket to `<app>/media/`. The copy never deletes anything in the backup; it skips files that are already there, and copies again files that were replaced in the media library since.
 
 These sites **refuse to run without `BACKUP_R2_*`** and print the `--no-media` command instead: a local backup without media files, nothing uploaded. Sites with media in `public/uploads` keep working without `BACKUP_R2_*` (full archive, stays on the server).
 
-**Restoring an R2/S3 site:** download the archive from `<app>/db/` and run `import.sh --file` (it leaves the media alone, see below). Copy back missing media with `rclone copy` from `<app>/media/` to the media bucket.
+**Restoring an R2/S3 site:** download the archive from `<app>/db/` and run `import.sh --file` (it leaves the media alone, see below). The toolkit has no media restore yet: copy missing files back from `<app>/media/` to the media bucket with any S3 tool.
 
 **Hang protection (`--stall-timeout`):**
 If the archive stops growing for 300 seconds (default), the export is stopped, the partial archive removed, and the script exits with an error. `--stall-timeout=SECONDS` changes the limit, `0` turns it off.

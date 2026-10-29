@@ -251,24 +251,13 @@ env_value() {
   grep -E "^${key}=" .env | tail -n 1 | cut -d '=' -f 2- | tr -d '"' | tr -d "'"
 }
 
-# rclone from PATH, else from the login user's ~/bin (installed without root)
-find_rclone() {
-  local login_home
-  if command -v rclone &> /dev/null; then
-    command -v rclone
-    return
-  fi
-  login_home=$(eval echo "~$(id -un)")
-  if [ -x "${login_home}/bin/rclone" ]; then
-    echo "${login_home}/bin/rclone"
-  fi
-}
-
-# Run rclone with the RCLONE_CONFIG_* remotes defined in this script
-rclone_cmd() {
+# Run the R2/S3 helper (backup/r2-backup.cjs) with the bucket credentials in
+# its environment only, so the Strapi export never gets them
+backup_tool() {
   (
-    export ${!RCLONE_CONFIG_@}
-    "$RCLONE" "$@"
+    export BACKUP_R2_ENDPOINT BACKUP_R2_ACCESS_KEY_ID BACKUP_R2_SECRET_ACCESS_KEY BACKUP_R2_BUCKET
+    export MEDIA_S3_ENDPOINT MEDIA_S3_REGION MEDIA_S3_ACCESS_KEY_ID MEDIA_S3_SECRET_ACCESS_KEY MEDIA_S3_BUCKET
+    node "$SCRIPT_DIR/r2-backup.cjs" "$@"
   )
 }
 
@@ -341,8 +330,18 @@ BACKUP_APP_NAME=$(env_value BACKUP_APP_NAME)
 BACKUP_APP_NAME=${BACKUP_APP_NAME:-$(basename "$PWD")}
 
 if [ -n "$LINK_EXPIRE" ]; then
-  if ! [[ "$LINK_EXPIRE" =~ ^[0-9]+[smhd]$ ]]; then
+  if ! [[ "$LINK_EXPIRE" =~ ^([0-9]+)([smhd])$ ]]; then
     error_exit "--link expiry must look like 30m, 24h or 7d: $LINK_EXPIRE"
+  fi
+  case ${BASH_REMATCH[2]} in
+    s) LINK_SECONDS=${BASH_REMATCH[1]} ;;
+    m) LINK_SECONDS=$((BASH_REMATCH[1] * 60)) ;;
+    h) LINK_SECONDS=$((BASH_REMATCH[1] * 3600)) ;;
+    d) LINK_SECONDS=$((BASH_REMATCH[1] * 86400)) ;;
+  esac
+  # Presigned URLs are valid for at most 7 days
+  if [ "$LINK_SECONDS" -lt 1 ] || [ "$LINK_SECONDS" -gt 604800 ]; then
+    error_exit "--link expiry must be between 1s and 7d: $LINK_EXPIRE"
   fi
   if [ "$NO_MEDIA" = true ]; then
     error_exit "--link needs an uploaded backup, but --no-media only makes a local one"
@@ -382,50 +381,24 @@ else
 fi
 
 if [ "$UPLOAD" = true ]; then
-  RCLONE=$(find_rclone)
-  if [ -z "$RCLONE" ]; then
-    error_exit "rclone is needed to upload the backup. Install it without root:
-    curl -fsSLO https://downloads.rclone.org/rclone-current-linux-amd64.zip
-    unzip -j rclone-current-linux-amd64.zip '*/rclone' -d ~/bin && rm rclone-current-linux-amd64.zip"
-  fi
-  success_msg "rclone found: $RCLONE"
-
-  # rclone remotes from environment variables, no rclone.conf needed. Set but
-  # not exported here: rclone_cmd exports them for rclone only, so the Strapi
-  # export never gets the backup credentials in its environment.
-  RCLONE_CONFIG_BACKUP_TYPE=s3
-  RCLONE_CONFIG_BACKUP_PROVIDER=Cloudflare
-  RCLONE_CONFIG_BACKUP_ENDPOINT="$BACKUP_R2_ENDPOINT"
-  RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID="$BACKUP_R2_ACCESS_KEY_ID"
-  RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY="$BACKUP_R2_SECRET_ACCESS_KEY"
-  # A token scoped to one bucket can't list or create buckets
-  RCLONE_CONFIG_BACKUP_NO_CHECK_BUCKET=true
-  BACKUP_REMOTE="backup:${BACKUP_R2_BUCKET}/${BACKUP_APP_NAME}"
-
-  # Fail now on wrong credentials, not after the export
-  rclone_cmd lsf "backup:${BACKUP_R2_BUCKET}" --max-depth 1 > /dev/null \
-    || error_exit "Cannot access the backup bucket ${BACKUP_R2_BUCKET} (check BACKUP_R2_* in .env)"
-  success_msg "Backup bucket reachable: ${BACKUP_R2_BUCKET}/${BACKUP_APP_NAME}/"
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  BACKUP_DEST="${BACKUP_APP_NAME}"
 
   if [ "$REMOTE_MEDIA" = true ]; then
-    MEDIA_ENDPOINT=$(env_value AWS_ENDPOINT)
-    RCLONE_CONFIG_MEDIA_TYPE=s3
-    RCLONE_CONFIG_MEDIA_ACCESS_KEY_ID="$(env_value AWS_ACCESS_KEY_ID)"
-    RCLONE_CONFIG_MEDIA_SECRET_ACCESS_KEY="$(env_value AWS_SECRET_ACCESS_KEY)"
-    RCLONE_CONFIG_MEDIA_NO_CHECK_BUCKET=true
-    if [ -z "$MEDIA_ENDPOINT" ]; then
-      RCLONE_CONFIG_MEDIA_PROVIDER=AWS
-      RCLONE_CONFIG_MEDIA_REGION="$(env_value AWS_REGION)"
-    elif [[ "$MEDIA_ENDPOINT" == *r2.cloudflarestorage.com* ]]; then
-      RCLONE_CONFIG_MEDIA_PROVIDER=Cloudflare
-      RCLONE_CONFIG_MEDIA_ENDPOINT="$MEDIA_ENDPOINT"
-    else
-      RCLONE_CONFIG_MEDIA_PROVIDER=Other
-      RCLONE_CONFIG_MEDIA_ENDPOINT="$MEDIA_ENDPOINT"
-    fi
-    rclone_cmd lsf "media:${MEDIA_BUCKET}" --max-depth 1 > /dev/null \
-      || error_exit "Cannot access the media bucket ${MEDIA_BUCKET} (check AWS_* in .env)"
-    success_msg "Media bucket reachable: ${MEDIA_BUCKET}"
+    MEDIA_S3_ENDPOINT=$(env_value AWS_ENDPOINT)
+    MEDIA_S3_REGION=$(env_value AWS_REGION)
+    MEDIA_S3_ACCESS_KEY_ID=$(env_value AWS_ACCESS_KEY_ID)
+    MEDIA_S3_SECRET_ACCESS_KEY=$(env_value AWS_SECRET_ACCESS_KEY)
+    MEDIA_S3_BUCKET=$MEDIA_BUCKET
+  fi
+
+  # Fail now on wrong credentials or a missing AWS SDK, not after the export
+  if [ "$REMOTE_MEDIA" = true ]; then
+    backup_tool check media || error_exit "Remote backup check failed (see above), nothing was exported"
+    success_msg "Backup bucket ${BACKUP_R2_BUCKET} and media bucket ${MEDIA_BUCKET} reachable"
+  else
+    backup_tool check || error_exit "Remote backup check failed (see above), nothing was exported"
+    success_msg "Backup bucket ${BACKUP_R2_BUCKET} reachable"
   fi
 fi
 
@@ -535,21 +508,14 @@ BACKUP_SIZE_FORMATTED=$(format_bytes $BACKUP_SIZE)
 
 success_msg "Backup archive created: $BACKUP_PATH ($BACKUP_SIZE_FORMATTED)"
 
-REMOTE_DB_PATH=""
 if [ "$UPLOAD" = true ]; then
-  REMOTE_DB_PATH="${BACKUP_REMOTE}/db/${BACKUP_FILE}"
+  REMOTE_DB_KEY="${BACKUP_DEST}/db/${BACKUP_FILE}"
   echo ""
-  info_msg "Uploading to ${BACKUP_R2_BUCKET}/${BACKUP_APP_NAME}/db/${BACKUP_FILE}..."
-  rclone_cmd copyto "$BACKUP_PATH" "$REMOTE_DB_PATH" \
+  info_msg "Uploading to ${BACKUP_R2_BUCKET}/${REMOTE_DB_KEY}..."
+  # Checks the uploaded size and md5 against the local file before we delete it
+  UPLOAD_CHECK=$(backup_tool upload "$BACKUP_PATH" "$REMOTE_DB_KEY") \
     || error_exit "Upload failed, the backup is still at: $BACKUP_PATH"
-
-  # Compare checksums before removing the only local copy
-  LOCAL_MD5=$(rclone_cmd md5sum "$BACKUP_PATH" | cut -d ' ' -f 1)
-  REMOTE_MD5=$(rclone_cmd md5sum "$REMOTE_DB_PATH" | cut -d ' ' -f 1)
-  if [ -z "$LOCAL_MD5" ] || [ "$LOCAL_MD5" != "$REMOTE_MD5" ]; then
-    error_exit "Uploaded backup does not match the local file (md5 ${LOCAL_MD5:-?} vs ${REMOTE_MD5:-?}), keeping: $BACKUP_PATH"
-  fi
-  success_msg "Upload verified (md5 $LOCAL_MD5)"
+  success_msg "Upload verified ($UPLOAD_CHECK)"
 
   if [ "$KEEP_LOCAL" = false ]; then
     rm -f "$BACKUP_PATH"
@@ -558,19 +524,17 @@ if [ "$UPLOAD" = true ]; then
 
   DOWNLOAD_URL=""
   if [ -n "$LINK_EXPIRE" ]; then
-    # Presigned URL: works without credentials until it expires (S3 allows at most 7 days)
-    DOWNLOAD_URL=$(rclone_cmd link "$REMOTE_DB_PATH" --expire "$LINK_EXPIRE") \
+    # Presigned URL: works without credentials until it expires
+    DOWNLOAD_URL=$(backup_tool link "$REMOTE_DB_KEY" "$LINK_SECONDS") \
       || warn_msg "Could not create the download link, the backup itself is uploaded"
   fi
 
   if [ "$REMOTE_MEDIA" = true ]; then
     # After the database export, so every file the backup refers to is copied.
-    # copy never deletes in the backup; unchanged files are skipped (md5 from the listing)
+    # Never deletes in the backup; files already copied are skipped
     echo ""
-    info_msg "Copying media ${MEDIA_BUCKET} -> ${BACKUP_R2_BUCKET}/${BACKUP_APP_NAME}/media/..."
-    rclone_cmd copy "media:${MEDIA_BUCKET}" "${BACKUP_REMOTE}/media" \
-      --checksum --fast-list --transfers 8 \
-      --stats 30s --stats-one-line --stats-log-level NOTICE \
+    info_msg "Copying media ${MEDIA_BUCKET} -> ${BACKUP_R2_BUCKET}/${BACKUP_DEST}/media/..."
+    backup_tool copy-media "${BACKUP_DEST}/media" \
       || error_exit "Media copy failed. The database backup is uploaded; re-run to retry (copied files are skipped)."
     success_msg "Media copied"
   fi
@@ -588,7 +552,7 @@ echo "========================================"
 echo "    Backup Details"
 echo "========================================"
 if [ "$UPLOAD" = true ]; then
-  echo "Remote: ${BACKUP_R2_BUCKET}/${BACKUP_APP_NAME}/db/${BACKUP_FILE}"
+  echo "Remote: ${BACKUP_R2_BUCKET}/${REMOTE_DB_KEY}"
   [ "$KEEP_LOCAL" = true ] && echo "Local: $BACKUP_PATH"
 else
   echo "Location: $BACKUP_PATH"
