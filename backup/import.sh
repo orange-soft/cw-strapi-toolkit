@@ -70,11 +70,20 @@ RECREATE_TABLES=false
 
 TOOLKIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME_DIR="$(basename "$PWD")"
-# Servers keep apps in public_html; anywhere else is a development machine
-if [[ "$PWD" == */public_html/* ]]; then
+# Server: deployed apps have .deploy-info (written by the deploy only) and live
+# in public_html, on cPanel and Cloudways alike. Anything else is a development machine.
+if [ -f .deploy-info ] || [[ "$PWD" == */public_html/* ]]; then
   ON_SERVER=true
-  # Next to the deploy's pre-deploy dumps: outside the web root, never touched by deploys
-  SAFE_DIR="$(eval echo "~$(id -un)")/private_html/strapi-backups/${APP_NAME_DIR}"
+  # The deploy's pre-deploy dumps folder: private_html next to public_html (the
+  # app user's home on both server types), outside the web root and never touched
+  # by deploys. Taken from the app's path, not $HOME (overridden on Cloudways) or
+  # the login user (SSH as the Cloudways master user has another home).
+  if [[ "$PWD" == */public_html/* ]]; then
+    PRIVATE_DIR="${PWD%%/public_html/*}/private_html"
+  else
+    PRIVATE_DIR="$(eval echo "~$(id -un)")/private_html"
+  fi
+  SAFE_DIR="${PRIVATE_DIR}/strapi-backups/${APP_NAME_DIR}"
 else
   ON_SERVER=false
   # Ignored by git and excluded from deploy rsync

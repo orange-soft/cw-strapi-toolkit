@@ -135,7 +135,7 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: $0 [OPTIONS]"
       echo ""
       echo "Options:"
-      echo "  --output=DIR    Where the local archive goes (default: ~/private_html/strapi-backups/<app>"
+      echo "  --output=DIR    Where the local archive goes (default: private_html/strapi-backups/<app>"
       echo "                  on servers, ./backups on a development machine). Never inside public/"
       echo "  --output DIR    Alternative syntax for output directory"
       echo "  --local-only    Keep the backup on this machine, upload nothing. Servers refuse to"
@@ -291,11 +291,20 @@ format_duration() {
   fi
 }
 
-# Servers keep apps in public_html; anywhere else is a development machine
-if [[ "$PWD" == */public_html/* ]]; then
+# Server: deployed apps have .deploy-info (written by the deploy only) and live
+# in public_html, on cPanel and Cloudways alike. Anything else is a development machine.
+if [ -f .deploy-info ] || [[ "$PWD" == */public_html/* ]]; then
   ON_SERVER=true
-  # Next to the deploy's pre-deploy dumps: outside the web root, never touched by deploys
-  DEFAULT_OUTPUT_DIR="$(eval echo "~$(id -un)")/private_html/strapi-backups/$(basename "$PWD")"
+  # The deploy's pre-deploy dumps folder: private_html next to public_html (the
+  # app user's home on both server types), outside the web root and never touched
+  # by deploys. Taken from the app's path, not $HOME (overridden on Cloudways) or
+  # the login user (SSH as the Cloudways master user has another home).
+  if [[ "$PWD" == */public_html/* ]]; then
+    PRIVATE_DIR="${PWD%%/public_html/*}/private_html"
+  else
+    PRIVATE_DIR="$(eval echo "~$(id -un)")/private_html"
+  fi
+  DEFAULT_OUTPUT_DIR="${PRIVATE_DIR}/strapi-backups/$(basename "$PWD")"
 else
   ON_SERVER=false
   # Ignored by git and excluded from deploy rsync
@@ -334,7 +343,7 @@ if [ "$PRINT_CRON" = true ]; then
   echo "    cd '$APP_DIR' && bash strapi-toolkit/backup/export.sh"
   if [ "$ON_SERVER" = false ]; then
     echo ""
-    warn_msg "This is not under public_html, so not a server: meant for the server's crontab"
+    warn_msg "This looks like a development machine (no .deploy-info, not in public_html): meant for the server's crontab"
   fi
   exit 0
 fi

@@ -248,11 +248,11 @@ bash strapi-toolkit/backup/export.sh --local-only
 | `--local-only` | Upload nothing, keep the archive on this machine |
 | `--keep-local` | Keep the local archive after uploading it |
 | `--no-media` | Leave media files out (records are still included), and skip the media bucket copy |
-| `--output DIR` | Where the local archive goes. Default `~/private_html/strapi-backups/<app>/` on servers (outside the web root, next to the pre-deploy dumps), `./backups/` on a development machine. Never inside `public/`, which the site serves |
+| `--output DIR` | Where the local archive goes. Default `private_html/strapi-backups/<app>/` on servers (see below), `./backups/` on a development machine. Never inside `public/`, which the site serves |
 | `--stall-timeout=SECONDS` | Stop the export when the archive stops growing this long (default 300, `0` = never) |
 | `--print-cron` | Print the crontab line for a daily backup of this app (see below) and exit |
 
-**Servers vs development machines:** an app under `public_html/` is a server. Servers refuse to back up without the backup bucket (`--local-only` to override); a development machine keeps the archive in `./backups/` when the bucket isn't set up.
+**Servers vs development machines:** an app with `.deploy-info` (written by the deploy) or under `public_html/` is on a server, cPanel or Cloudways. Local files on servers go to the `private_html` next to `public_html`, where the deploy keeps its pre-deploy dumps: outside the web root and never touched by deploys. That is `~/private_html` on cPanel and `/home/master/applications/<app>/private_html` on Cloudways, whichever user is logged in (app user or master). Servers refuse to back up without the backup bucket (`--local-only` to override); a development machine keeps the archive in `./backups/` when the bucket isn't set up.
 
 **The backup bucket (`BACKUP_R2_*` in `.env`):**
 
@@ -318,7 +318,7 @@ bash strapi-toolkit/backup/import.sh --file ./backups/backup-1793268008.tar.gz
 2. Decides what to import:
    - **Media files:** never on R2/S3 sites (importing them makes Strapi delete every existing media file through the upload provider, which is the live bucket, also from a development machine whose `.env` has the bucket's keys), nor from archives without media. Media library records are always imported and keep pointing at the existing files
    - **Settings, webhooks, plugin settings** (Strapi's configuration: admin settings, plugin settings such as the Meilisearch host and indexing key): imported on servers; a development machine keeps its own unless `--with-config`, otherwise editing content there would update production's search index and fire production webhooks
-3. MySQL: saves a safety dump of the current database to `~/private_html/strapi-backups/<app>/` (server) or `./backups/` (development machine), where deploys never delete it. The password goes through `MYSQL_PWD`, never the command line
+3. MySQL: saves a safety dump of the current database to `private_html/strapi-backups/<app>/` (server, cPanel or Cloudways, see export.sh) or `./backups/` (development machine), where deploys never delete it. The password goes through `MYSQL_PWD`, never the command line
 4. Shows what will happen and asks for `yes`
 5. On a server: stops the app through `pm2-manager.sh` (restarted afterwards, also when the import fails or the script is interrupted)
 6. Runs `strapi import --force`. Strapi imports in one transaction: if it fails (e.g. the archive's content types differ from the code's), it is rolled back and the database is left as it was
