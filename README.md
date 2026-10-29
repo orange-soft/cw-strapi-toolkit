@@ -257,11 +257,14 @@ bash strapi-toolkit/backup/export.sh --local-only
 **The backup bucket (`BACKUP_R2_*` in `.env`):**
 
 ```
-strapi-backup/                        # one bucket for all apps
-└── reading-strapi/                   # BACKUP_APP_NAME, default: the app's directory name
-    ├── db/backup-1793268008.tar.gz   # one archive per run
-    └── media/                         # copy of the app's media bucket (R2/S3 sites)
+strapi-backup/                              # one bucket for all apps
+└── reading-strapi/                         # BACKUP_APP_NAME, default: the app's directory name
+    ├── db/backup-1793268008.tar.gz         # one archive per run
+    ├── media/<key>                         # first copy of each media file (R2/S3 sites)
+    └── media-versions/<time>/<key>         # each later version of a replaced file
 ```
+
+The backup only ever creates objects: it never overwrites or deletes one. So it works under a retention lock (below), and replacing a file in the media library (which keeps its key) doesn't lose the earlier version: the new content goes to `media-versions/<time of the run>/<key>`. The newest copy of a file is its latest `media-versions` entry, else `media/`.
 
 ```bash
 BACKUP_R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
@@ -271,11 +274,15 @@ BACKUP_R2_BUCKET=strapi-backup    # optional
 BACKUP_APP_NAME=                  # optional
 ```
 
-With these set: both buckets are checked before exporting; the archive is uploaded to `<app>/db/`, its size and md5 compared with the local file, and the local copy removed (`--keep-local` keeps it). A failed or mismatching upload keeps the local archive and exits with an error. Old archives are not pruned: use an R2 lifecycle rule on `*/db/`.
+With these set: both buckets are checked before exporting; the archive is uploaded to `<app>/db/`, its size and md5 compared with the local file, and the local copy removed (`--keep-local` keeps it). A failed or mismatching upload keeps the local archive and exits with an error.
+
+**Retention lock (set once on the bucket):** the backup keys live in each server's `.env`, and R2 keys that can write can also delete. A bucket lock rule makes every object undeletable and unchangeable for a set time, whatever the keys, so a compromised server or a bad script can't destroy recent backups. In the Cloudflare dashboard: *R2 → strapi-backup → Settings → Bucket lock rules → Add rule*, no prefix (whole bucket), retention e.g. 30 days. That needs a Cloudflare login, not the app's keys, which is the point. Keep the heartbeat monitoring on, so a problem is noticed within the lock period. Nobody (you included) can delete anything younger than the retention period.
+
+**Old archives:** not pruned by the toolkit (it never deletes). Storage is cheap (a few MB per database archive), but if wanted, add an R2 lifecycle rule per app on the prefix `<app>/db/`, longer than the lock period. Never on `media/` or `media-versions/`: those hold the only copies of files no longer in the media bucket.
 
 Nothing to install: `backup/r2-backup.cjs` uses the AWS SDK that comes with `@strapi/provider-upload-aws-s3` in the app's `node_modules` (Cloudways app users can't install software outside `public_html`). Apps without that provider can't upload.
 
-**Sites with media in R2/S3** (`@strapi/provider-upload-aws-s3` + `AWS_BUCKET`): Strapi's export would download every media file over HTTP, which is slow and can hang forever (when a CDN compresses a file, e.g. Cloudflare in front of an R2 custom domain serving SVGs, its size no longer matches `Content-Length`, the archive breaks and the export never exits). So the archive never contains their media files; after the export the media bucket is copied to `<app>/media/`. The copy never deletes in the backup; it skips files already there and copies again files replaced in the media library since (same key, newer date).
+**Sites with media in R2/S3** (`@strapi/provider-upload-aws-s3` + `AWS_BUCKET`): Strapi's export would download every media file over HTTP, which is slow and can hang forever (when a CDN compresses a file, e.g. Cloudflare in front of an R2 custom domain serving SVGs, its size no longer matches `Content-Length`, the archive breaks and the export never exits). So the archive never contains their media files; after the export the media bucket is copied: new files to `<app>/media/`, files replaced in the media library since their last copy (same key, different size or newer date) to `<app>/media-versions/<time>/`, unchanged files skipped.
 
 **Daily backups (cron):** run `bash strapi-toolkit/backup/export.sh --print-cron` in the app folder on the server. It prints the exact line for this app, e.g.:
 
@@ -325,7 +332,7 @@ bash strapi-toolkit/backup/import.sh --file ./backups/backup-1793268008.tar.gz
 
 Needs the MySQL client tools for MySQL databases (macOS: `brew install mysql-client`). Admin users are not in backups, so a development machine keeps its own admin login.
 
-**Restoring media of an R2/S3 site:** the media bucket is never touched by an import. If files are missing from it, copy them back from `<app>/media/` in the backup bucket with any S3 tool (the toolkit has no media restore yet).
+**Restoring media of an R2/S3 site:** the media bucket is never touched by an import. If files are missing from it, copy them back from the backup bucket with any S3 tool (the toolkit has no media restore yet): the newest copy of a file is its latest `<app>/media-versions/<time>/<key>`, else `<app>/media/<key>`.
 
 ---
 

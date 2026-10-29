@@ -603,10 +603,11 @@ if [ "$UPLOAD" = true ]; then
 
   if [ "$COPY_MEDIA" = true ]; then
     # After the database export, so every file the backup refers to is copied.
-    # Never deletes in the backup; files already copied are skipped
+    # Never overwrites or deletes in the backup (works under a bucket lock):
+    # replaced files get a new version in media-versions/
     echo ""
     info_msg "Copying media ${MEDIA_BUCKET} -> ${BACKUP_R2_BUCKET}/${BACKUP_DEST}/media/..."
-    backup_tool copy-media "${BACKUP_DEST}/media" \
+    backup_tool copy-media "${BACKUP_DEST}" \
       || error_exit "Media copy failed. The database backup is uploaded; re-run to retry (copied files are skipped)."
     success_msg "Media copied"
   fi

@@ -9,7 +9,8 @@
 // Run from the app directory, credentials come from the environment:
 //   node r2-backup.cjs check [media]           can we reach the bucket(s)?
 //   node r2-backup.cjs upload <file> <key>     upload, then verify size + md5
-//   node r2-backup.cjs copy-media <prefix>     copy the media bucket to <prefix>/
+//   node r2-backup.cjs copy-media <app>        copy the media bucket to <app>/media/
+//                                              (new versions to <app>/media-versions/)
 //   node r2-backup.cjs link <key> <seconds>    presigned download URL
 //
 // Backup bucket: BACKUP_R2_ENDPOINT, BACKUP_R2_ACCESS_KEY_ID,
@@ -168,21 +169,45 @@ async function copyOne(media, backup, key, destKey) {
   }
 }
 
-async function copyMedia(prefix) {
+// The backup never overwrites or deletes an object, so it works under an R2
+// bucket lock and keeps every version of a file:
+//   <app>/media/<key>                     first copy of each file
+//   <app>/media-versions/<stamp>/<key>    a file replaced in the media library
+//                                         (Strapi's "replace media" keeps the key),
+//                                         as copied by the run at <stamp>
+// The newest copy of a file is its latest media-versions entry, else media/.
+async function copyMedia(app) {
   const media = mediaBucket();
   const backup = backupBucket();
-  const destPrefix = `${prefix.replace(/\/+$/, '')}/`;
+  const base = `${app.replace(/\/+$/, '')}/`;
+  // Sorts in time order, unique per run
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
 
-  const [source, copied] = await Promise.all([listAll(media, ''), listAll(backup, destPrefix)]);
-  // Missing, different size, or replaced in the media library since the last
-  // copy (Strapi's "replace media" keeps the key). Never deletes from the backup.
-  const todo = [...source].filter(([key, object]) => {
-    if (key.endsWith('/')) return false;
-    const copy = copied.get(key);
-    return !copy || copy.Size !== object.Size || object.LastModified > copy.LastModified;
-  });
+  const [source, firstCopies, versions] = await Promise.all([
+    listAll(media, ''),
+    listAll(backup, `${base}media/`),
+    listAll(backup, `${base}media-versions/`),
+  ]);
+  const newest = new Map(firstCopies);
+  for (const [stampedKey, object] of [...versions].sort(([a], [b]) => a.localeCompare(b))) {
+    newest.set(stampedKey.slice(stampedKey.indexOf('/') + 1), object);
+  }
+
+  // New files go to media/; files that differ from their newest copy (size, or
+  // modified after it was copied) get a new version
+  const todo = [];
+  for (const [key, object] of source) {
+    if (key.endsWith('/')) continue;
+    const copy = newest.get(key);
+    if (!copy) {
+      todo.push([key, object, `${base}media/${key}`]);
+    } else if (copy.Size !== object.Size || object.LastModified > copy.LastModified) {
+      todo.push([key, object, `${base}media-versions/${stamp}/${key}`]);
+    }
+  }
   const bytes = todo.reduce((sum, [, object]) => sum + (object.Size || 0), 0);
-  console.log(`${source.size} files in ${media.bucket}, ${todo.length} to copy (${(bytes / 1048576).toFixed(1)} MB)`);
+  const changed = todo.filter(([, , destKey]) => destKey.includes('/media-versions/')).length;
+  console.log(`${source.size} files in ${media.bucket}, ${todo.length - changed} new and ${changed} replaced to copy (${(bytes / 1048576).toFixed(1)} MB)`);
 
   let done = 0;
   const failed = [];
@@ -190,9 +215,9 @@ async function copyMedia(prefix) {
   const queue = [...todo];
   async function worker() {
     for (let next = queue.shift(); next; next = queue.shift()) {
-      const [key] = next;
+      const [key, , destKey] = next;
       try {
-        await copyOne(media, backup, key, destPrefix + key);
+        await copyOne(media, backup, key, destKey);
       } catch (error) {
         failed.push(`${key}: ${describe(error)}`);
       }
