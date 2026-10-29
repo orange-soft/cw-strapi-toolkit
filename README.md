@@ -104,8 +104,9 @@ Both `update.sh` and `install.sh` update safely:
 ```
 strapi-toolkit/
 ├── backup/          # Data backup and restore utilities
-│   ├── export.sh    # Export Strapi database + uploads
-│   └── import.sh    # Restore from backup archive
+│   ├── export.sh    # Back up (Strapi export) to the strapi-backup R2 bucket
+│   ├── import.sh    # Restore a backup (Strapi import), safe for local development
+│   └── r2-backup.cjs # R2/S3 helper for export.sh (uses the app's AWS SDK)
 │
 ├── cloudways/       # Cloudways-specific tools
 │   ├── sync-to-cloudways.sh   # Upload files via rsync
@@ -138,21 +139,18 @@ strapi-toolkit/
 ### 1. Backup Strapi Data
 
 ```bash
-# Interactive mode (prompts for output directory)
-bash strapi-toolkit/backup/export.sh
-
-# Direct mode
-bash strapi-toolkit/backup/export.sh --output ./backups
+# On the server: upload to the backup bucket, print a 24h download URL
+bash strapi-toolkit/backup/export.sh --link
 ```
 
 ### 2. Restore Strapi Data
 
 ```bash
-# Interactive mode
+# Paste a backup URL when asked (e.g. from export.sh --link)
 bash strapi-toolkit/backup/import.sh
 
-# Direct mode
-bash strapi-toolkit/backup/import.sh --file ./backup.tar.gz
+# Or a local archive
+bash strapi-toolkit/backup/import.sh --file ./backups/backup-1793268008.tar.gz
 ```
 
 ### 3. Upload Files to Cloudways
@@ -230,47 +228,37 @@ bash strapi-toolkit/setup/generate-env-keys.sh
 
 ### `backup/export.sh`
 
-**Purpose:** Export complete Strapi application data (database + uploaded files)
+**Purpose:** Back up a Strapi app off-site: Strapi's own export (`strapi export`), uploaded to a shared R2 bucket.
 
-**Key Features:**
-- Automatic NVM/Node environment detection
-- Auto-detects `.nvmrc` for correct Node version
-- Creates timestamped backup archives
-- Includes both SQLite database and `public/uploads/` files
-- Works on any environment (local, server, Cloudways)
+**What a backup contains** (`backup-<timestamp>.tar.gz`, not encrypted): content types, all entries (including media library records, users-permissions users and roles), relations, and configuration (admin and plugin settings, webhooks). Media files only for sites with media in `public/uploads`; sites with media in R2/S3 get a copy of their media bucket next to the archive instead. Works with any database Strapi supports. Admin users are not part of Strapi exports.
 
 **Usage:**
 
 ```bash
-# Interactive mode (prompts for output directory)
-bash strapi-toolkit/backup/export.sh
-
-# Direct mode with specific output directory
-bash strapi-toolkit/backup/export.sh --output ./backups
-
-# Local backup without media files, nothing uploaded
-bash strapi-toolkit/backup/export.sh --no-media --output ./backups
-
-# Upload to the backup bucket but keep the local archive too
-bash strapi-toolkit/backup/export.sh --keep-local
-
-# Also print a temporary download URL (24h; --link=1h for another expiry, max 7d)
+# Production: upload to the backup bucket and print a download URL (24h)
 bash strapi-toolkit/backup/export.sh --link
 
-# Creates file like: strapi-backup-20241030-153045.tar.gz
+# Keep the archive on this machine only
+bash strapi-toolkit/backup/export.sh --local-only
 ```
 
-**What's Included in Backup:**
-- `.tmp/data.db` (SQLite database)
-- `public/uploads/*` (all uploaded media files)
+| Option | |
+|---|---|
+| `--link`, `--link=1h` | Print a presigned download URL for the uploaded archive (default 24h, at most 7d). Anyone with the URL can download the whole database until it expires: don't post it where it stays around |
+| `--local-only` | Upload nothing, keep the archive on this machine |
+| `--keep-local` | Keep the local archive after uploading it |
+| `--no-media` | Leave media files out (records are still included), and skip the media bucket copy |
+| `--output DIR` | Where the local archive goes. Default `~/private_html/strapi-backups/<app>/` on servers (outside the web root, next to the pre-deploy dumps), `./backups/` on a development machine. Never inside `public/`, which the site serves |
+| `--stall-timeout=SECONDS` | Stop the export when the archive stops growing this long (default 300, `0` = never) |
 
-**Remote backups (`BACKUP_R2_*` in `.env`):**
-One R2 bucket (default `strapi-backup`) holds the backups of all apps, one folder per app (`BACKUP_APP_NAME`, default: the app's directory name):
+**Servers vs development machines:** an app under `public_html/` is a server. Servers refuse to back up without the backup bucket (`--local-only` to override); a development machine keeps the archive in `./backups/` when the bucket isn't set up.
+
+**The backup bucket (`BACKUP_R2_*` in `.env`):**
 
 ```
-strapi-backup/
-└── reading-strapi/
-    ├── db/backup-1793268008.tar.gz   # Strapi export archive
+strapi-backup/                        # one bucket for all apps
+└── reading-strapi/                   # BACKUP_APP_NAME, default: the app's directory name
+    ├── db/backup-1793268008.tar.gz   # one archive per run
     └── media/                         # copy of the app's media bucket (R2/S3 sites)
 ```
 
@@ -282,62 +270,50 @@ BACKUP_R2_BUCKET=strapi-backup    # optional
 BACKUP_APP_NAME=                  # optional
 ```
 
-With these set, the archive is exported locally, uploaded to `<app>/db/`, checked (md5 of the local file vs the uploaded one) and then removed locally (`--keep-local` keeps it). If the upload fails or doesn't match, the local archive is kept and the script exits with an error. Old archives are not pruned: use an R2 lifecycle rule on `*/db/`.
+With these set: both buckets are checked before exporting; the archive is uploaded to `<app>/db/`, its size and md5 compared with the local file, and the local copy removed (`--keep-local` keeps it). A failed or mismatching upload keeps the local archive and exits with an error. Old archives are not pruned: use an R2 lifecycle rule on `*/db/`.
 
-**Getting the archive back:** the bucket is private. Download it from the Cloudflare dashboard (R2 → bucket → `<app>/db/`) or run the export with `--link`: it prints a presigned URL that works without credentials until it expires, ready to paste into `import.sh` on another server. Anyone with that URL can download the whole database (including admin accounts) until then, so don't post it where it stays around.
+Nothing to install: `backup/r2-backup.cjs` uses the AWS SDK that comes with `@strapi/provider-upload-aws-s3` in the app's `node_modules` (Cloudways app users can't install software outside `public_html`). Apps without that provider can't upload.
 
-Nothing to install: `backup/r2-backup.cjs` does the uploads with the AWS SDK the app already has (it comes with `@strapi/provider-upload-aws-s3`), so it works for Cloudways app users, who can't install software outside `public_html`. The app must have that provider in its `node_modules`.
+**Sites with media in R2/S3** (`@strapi/provider-upload-aws-s3` + `AWS_BUCKET`): Strapi's export would download every media file over HTTP, which is slow and can hang forever (when a CDN compresses a file, e.g. Cloudflare in front of an R2 custom domain serving SVGs, its size no longer matches `Content-Length`, the archive breaks and the export never exits). So the archive never contains their media files; after the export the media bucket is copied to `<app>/media/`. The copy never deletes in the backup; it skips files already there and copies again files replaced in the media library since (same key, newer date).
 
-**Sites with media in R2/S3** (`@strapi/provider-upload-aws-s3` + `AWS_BUCKET`):
-Strapi's export downloads every media file over HTTP into the archive. That is slow, and it can hang forever: when a CDN compresses files (e.g. Cloudflare in front of an R2 custom domain serving SVGs) the downloaded size no longer matches `Content-Length`, the archive breaks and the export never exits. So these sites export the database only (`--exclude files`; media library records are still included) and, after the export, copy the media bucket to `<app>/media/`. The copy never deletes anything in the backup; it skips files that are already there, and copies again files that were replaced in the media library since.
-
-These sites **refuse to run without `BACKUP_R2_*`** and print the `--no-media` command instead: a local backup without media files, nothing uploaded. Sites with media in `public/uploads` keep working without `BACKUP_R2_*` (full archive, stays on the server).
-
-**Restoring an R2/S3 site:** download the archive from `<app>/db/` and run `import.sh --file` (it leaves the media alone, see below). The toolkit has no media restore yet: copy missing files back from `<app>/media/` to the media bucket with any S3 tool.
-
-**Hang protection (`--stall-timeout`):**
-If the archive stops growing for 300 seconds (default), the export is stopped, the partial archive removed, and the script exits with an error. `--stall-timeout=SECONDS` changes the limit, `0` turns it off.
-
-**Use Cases:**
-- Before major updates or migrations
-- Creating development snapshots
-- Disaster recovery preparation
-- Moving data between environments
+**Hang protection:** the export runs in the background; if the archive stops growing for `--stall-timeout` seconds, the export is stopped, the partial archive removed, and the script exits with an error. Ctrl+C stops the whole npm → node tree.
 
 ---
 
 ### `backup/import.sh`
 
-**Purpose:** Restore Strapi data from a backup archive
-
-**Key Features:**
-- Validates backup file integrity before importing
-- Automatically stops Strapi during import (if running)
-- Backs up existing data before overwriting
-- Restarts application after successful import
-- Environment auto-detection
+**Purpose:** Restore a backup into this app (`strapi import`), on a server or on a development machine.
 
 **Usage:**
 
 ```bash
-# Interactive mode (prompts for backup file)
+# Prompts for a backup URL (e.g. from export.sh --link)
 bash strapi-toolkit/backup/import.sh
 
-# Direct mode with specific backup file
-bash strapi-toolkit/backup/import.sh --file ./strapi-backup-20241030-153045.tar.gz
+# Local archive
+bash strapi-toolkit/backup/import.sh --file ./backups/backup-1793268008.tar.gz
 ```
 
-**Safety Features:**
-- Creates backup of current data before import
-- Backups without media files (`export.sh --no-media`) are imported with `--exclude files`, so existing media (local uploads or R2/S3 objects) is never deleted
-- Validates archive structure
-- Atomic operation (all-or-nothing)
+| Option | |
+|---|---|
+| `--file PATH` | Import a local archive instead of downloading one |
+| `--with-config` | Also import the backup's settings, webhooks and plugin settings on a development machine (default there: keep its own) |
+| `--recreate-tables` | MySQL: drop all tables first so Strapi recreates them, e.g. after converting the database to utf8mb4. Not rolled back if the import fails |
 
-**Use Cases:**
-- Restoring production data to local development
-- Rolling back to previous state
-- Cloning data between servers
-- Disaster recovery
+**What it does:**
+
+1. Gets the archive: downloads the URL (checks it isn't an error page) or uses `--file`
+2. Decides what to import:
+   - **Media files:** never on R2/S3 sites (importing them makes Strapi delete every existing media file through the upload provider, which is the live bucket, also from a development machine whose `.env` has the bucket's keys), nor from archives without media. Media library records are always imported and keep pointing at the existing files
+   - **Settings, webhooks, plugin settings** (Strapi's configuration: admin settings, plugin settings such as the Meilisearch host and indexing key): imported on servers; a development machine keeps its own unless `--with-config`, otherwise editing content there would update production's search index and fire production webhooks
+3. MySQL: saves a safety dump of the current database to `~/private_html/strapi-backups/<app>/` (server) or `./backups/` (development machine), where deploys never delete it. The password goes through `MYSQL_PWD`, never the command line
+4. Shows what will happen and asks for `yes`
+5. On a server: stops the app through `pm2-manager.sh` (restarted afterwards, also when the import fails or the script is interrupted)
+6. Runs `strapi import --force`. Strapi imports in one transaction: if it fails (e.g. the archive's content types differ from the code's), it is rolled back and the database is left as it was
+
+Needs the MySQL client tools for MySQL databases (macOS: `brew install mysql-client`). Admin users are not in backups, so a development machine keeps its own admin login.
+
+**Restoring media of an R2/S3 site:** the media bucket is never touched by an import. If files are missing from it, copy them back from `<app>/media/` in the backup bucket with any S3 tool (the toolkit has no media restore yet).
 
 ---
 
@@ -798,50 +774,42 @@ sudo install -m 755 /tmp/setup-site.sh /usr/local/bin/setup-strapi-site
 
 Complete step-by-step guides for common scenarios.
 
-### Workflow 1: Migrate Production Data to Local Development
+### Workflow 1: Production Data on a Development Machine
 
 ```bash
-# 1. On production server - Export data
-cd ~/public_html
-bash strapi-toolkit/backup/export.sh --output .
+# 1. On the production server: back up, print a download URL
+cd ~/public_html/<app>
+bash strapi-toolkit/backup/export.sh --link
 
-# 2. Download backup to local machine
-scp -P 22000 user@host:~/public_html/strapi-backup-*.tar.gz ./
-
-# 3. On local machine - Import data
+# 2. On the development machine (npm run develop stopped): paste the URL
 cd ~/projects/my-strapi-app
-bash strapi-toolkit/backup/import.sh --file ./strapi-backup-*.tar.gz
+bash strapi-toolkit/backup/import.sh
 
-# 4. Start local development
+# 3. Start local development
 npm run develop
 ```
+
+The development machine keeps its own settings, webhooks and plugin settings (so it never updates production's search index), and the media files of an R2/S3 site are left alone: the imported records point at the production files, which load read-only by URL. Don't give a development machine the production media bucket's keys: deleting or replacing media there would change production's files.
 
 ---
 
 ### Workflow 2: Deploy Code Updates to Cloudways
 
 ```bash
-# 1. On local machine - Create backup first (safety)
-bash strapi-toolkit/backup/export.sh --output ./backups
+# 1. On the server - Back up first (safety)
+bash strapi-toolkit/backup/export.sh
 
-# 2. Upload backup to Cloudways (optional safety measure)
-bash strapi-toolkit/cloudways/sync-to-cloudways.sh \
-  ./backups/strapi-backup-*.tar.gz \
-  --target user@host \
-  --port 22000 \
-  --dest backups/
-
-# 3. On local - Push code changes
+# 2. On local - Push code changes
 git add .
 git commit -m "Update feature X"
 git push origin master
 
-# 4. On Cloudways - Pull and deploy
+# 3. On Cloudways - Pull and deploy
 cd ~/public_html
 git pull origin master
 bash strapi-toolkit/deploy/build-and-restart.sh
 
-# 5. Verify deployment
+# 4. Verify deployment
 bash strapi-toolkit/pm2/pm2-manager.sh status
 bash strapi-toolkit/pm2/pm2-manager.sh logs 50
 ```
@@ -905,10 +873,10 @@ bash strapi-toolkit/cloudways/fix-permissions.sh
 ```bash
 # Scenario: Deployment broke production, need to rollback
 
-# 1. On Cloudways - Import last known good backup
-cd ~/public_html
-bash strapi-toolkit/backup/import.sh \
-  --file ./backups/strapi-backup-20241029-*.tar.gz
+# 1. On Cloudways - Import the last good backup (URL from export.sh --link,
+#    or a download link for <app>/db/ in the backup bucket)
+cd ~/public_html/<app>
+bash strapi-toolkit/backup/import.sh
 
 # 2. Rollback code via git
 git log --oneline  # Find last good commit
@@ -927,27 +895,20 @@ bash strapi-toolkit/pm2/pm2-manager.sh logs 100
 ### Workflow 6: Complete Deployment Workflow
 
 ```bash
-# 1. On local - Export data (safety backup)
-bash strapi-toolkit/backup/export.sh --output ./backups
+# 1. On the server - Back up (safety)
+bash strapi-toolkit/backup/export.sh
 
-# 2. Upload backup to Cloudways
-bash strapi-toolkit/cloudways/sync-to-cloudways.sh \
-  ./backups/strapi-backup-*.tar.gz \
-  --target user@host \
-  --port 22000 \
-  --dest backups/
-
-# 3. On local - Commit and push code
+# 2. On local - Commit and push code
 git add .
 git commit -m "Update feature X"
 git push origin master
 
-# 4. On Cloudways - Pull and deploy
+# 3. On Cloudways - Pull and deploy
 cd ~/public_html
 git pull origin master
 bash strapi-toolkit/deploy/build-and-restart.sh
 
-# 5. Verify deployment
+# 4. Verify deployment
 bash strapi-toolkit/pm2/pm2-manager.sh status
 bash strapi-toolkit/pm2/pm2-manager.sh logs 50
 ```
@@ -994,15 +955,16 @@ build-and-restart.sh
 #### Backup/Restore Workflow
 
 ```
-export.sh                          import.sh
-    │                                  │
-    ├─→ Detect environment             ├─→ Validate backup file
-    ├─→ Load NVM + Node                ├─→ Backup current data
-    ├─→ Create temp directory          ├─→ Stop Strapi (pm2-manager.sh)
-    ├─→ Copy database                  ├─→ Extract archive
-    ├─→ Copy uploads/                  ├─→ Restore database
-    ├─→ Create tar.gz                  ├─→ Restore uploads/
-    └─→ Cleanup                        └─→ Restart Strapi
+export.sh                              import.sh
+    │                                      │
+    ├─→ Load NVM + Node                    ├─→ Download / unpack the archive
+    ├─→ Check the backup + media buckets   ├─→ Exclude media (R2/S3, no media in
+    ├─→ strapi export (stall watchdog)     │     archive), config (dev machine)
+    ├─→ Upload to <app>/db/, check md5     ├─→ MySQL safety dump (private_html / ./backups)
+    ├─→ Remove the local archive           ├─→ Confirm
+    └─→ Copy media bucket → <app>/media/   ├─→ Stop the app (server, pm2-manager.sh)
+                                           ├─→ strapi import (one transaction)
+                                           └─→ Restart the app
 ```
 
 #### File Upload Workflow
@@ -1363,8 +1325,8 @@ A: Yes! Most scripts work universally. Only `cloudways/fix-permissions.sh` is Cl
 **Q: Do I need to install the toolkit on my local machine too?**
 A: Yes, if you want to use backup/restore locally or upload files to servers. The toolkit works everywhere.
 
-**Q: What if my project uses PostgreSQL instead of SQLite?**
-A: You'll need to modify `backup/export.sh` and `backup/import.sh` to use `pg_dump` and `pg_restore` instead of copying `.tmp/data.db`. This is a planned enhancement.
+**Q: What if my project uses PostgreSQL instead of MySQL?**
+A: Backups use Strapi's own export/import, which works with any database Strapi supports. Only the safety dump before an import is MySQL-only.
 
 **Q: Can I customize the scripts for my specific needs?**
 A: Absolutely! Fork the repository and modify as needed. The scripts are designed to be readable and maintainable.

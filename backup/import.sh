@@ -65,6 +65,21 @@ fi
 # Default configuration
 LOCAL_FILE=""
 BACKUP_URL=""
+WITH_CONFIG=false
+RECREATE_TABLES=false
+
+TOOLKIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP_NAME_DIR="$(basename "$PWD")"
+# Servers keep apps in public_html; anywhere else is a development machine
+if [[ "$PWD" == */public_html/* ]]; then
+  ON_SERVER=true
+  # Next to the deploy's pre-deploy dumps: outside the web root, never touched by deploys
+  SAFE_DIR="$(eval echo "~$(id -un)")/private_html/strapi-backups/${APP_NAME_DIR}"
+else
+  ON_SERVER=false
+  # Ignored by git and excluded from deploy rsync
+  SAFE_DIR="$PWD/backups"
+fi
 
 # Color codes for output (if terminal supports it)
 if [ -t 1 ]; then
@@ -100,6 +115,11 @@ info_msg() {
 # Warning message
 warn_msg() {
   echo -e "${YELLOW}[!] $1${NC}"
+}
+
+# Value from .env (quotes stripped, values may contain "=")
+env_file_value() {
+  grep -E "^$1=" .env 2>/dev/null | tail -n 1 | cut -d '=' -f 2- | tr -d '"' | tr -d "'"
 }
 
 # Format bytes to human readable (using bash arithmetic, no bc dependency)
@@ -145,6 +165,13 @@ format_duration() {
 cleanup() {
   local exit_code=$?
 
+  # Never leave the site down because the script stopped early
+  if [ "${APP_STOPPED:-false}" = true ]; then
+    APP_STOPPED=false
+    warn_msg "Restarting the app..."
+    bash "$PM2_MANAGER" restart || true
+  fi
+
   # Clean up downloaded backup file (if we downloaded it)
   if [ -n "$TEMP_DOWNLOADED_FILE" ] && [ -f "$TEMP_DOWNLOADED_FILE" ]; then
     info_msg "Cleaning up downloaded file..."
@@ -180,12 +207,26 @@ while [[ $# -gt 0 ]]; do
       LOCAL_FILE="$2"
       shift 2
       ;;
+    --with-config)
+      WITH_CONFIG=true
+      shift
+      ;;
+    --recreate-tables)
+      RECREATE_TABLES=true
+      shift
+      ;;
     -h|--help)
       echo "Usage: $0 [OPTIONS]"
       echo ""
       echo "Options:"
       echo "  --file=PATH     Use a local backup file instead of downloading from URL"
       echo "  --file PATH     Alternative syntax for local file"
+      echo "  --with-config   Also import the backup's settings, webhooks and plugin settings"
+      echo "                  (e.g. Meilisearch host and keys). Default: on servers yes, on a"
+      echo "                  development machine no, so it never talks to production services"
+      echo "  --recreate-tables"
+      echo "                  MySQL: drop ALL tables first so Strapi recreates them (use with the"
+      echo "                  utf8mb4 conversion). Not rolled back if the import fails"
       echo "  -h, --help      Show this help message"
       echo ""
       echo "Examples:"
@@ -279,8 +320,8 @@ else
   info_msg "Detected filename: $FILENAME"
 
   # Get script directory
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  DOWNLOAD_PATH="$SCRIPT_DIR/$FILENAME"
+  mkdir -p "$SAFE_DIR" || error_exit "Cannot create $SAFE_DIR"
+  DOWNLOAD_PATH="$SAFE_DIR/$FILENAME"
 
   echo ""
   info_msg "Downloading backup file..."
@@ -381,18 +422,34 @@ fi
 # Get the import filename
 IMPORT_FILENAME=$(basename "$IMPORT_FILE")
 
-# A backup made with export.sh --no-media has no media files. Importing it
-# normally would make Strapi delete every existing media file first (through
-# the upload provider, so R2/S3 objects too) and restore none, so leave media
-# alone instead. The media library records are still restored.
+# Media files: an import with media makes Strapi delete every existing media
+# file through the upload provider before restoring the backup's. On R2/S3
+# sites that is the live bucket (also from a development machine whose .env
+# has the bucket's keys), so these sites never import media: their media is
+# backed up and restored separately. Archives without media (export.sh
+# --no-media, R2/S3 sites) skip it too. Media library records are always
+# imported and keep pointing at the existing files.
+EXCLUDE=()
+if grep -q '"@strapi/provider-upload-aws-s3"' package.json && [ -n "$(env_file_value AWS_BUCKET)" ]; then
+  EXCLUDE_MEDIA_REASON="this site stores media in R2/S3 (bucket: $(env_file_value AWS_BUCKET)), media files are never imported"
+elif [[ "$IMPORT_FILENAME" == *.tar ]] && ! tar -tf "$IMPORT_FILE" 2>/dev/null | grep -q '^assets/uploads/'; then
+  EXCLUDE_MEDIA_REASON="the backup has no media files"
+else
+  EXCLUDE_MEDIA_REASON=""
+fi
+[ -n "$EXCLUDE_MEDIA_REASON" ] && EXCLUDE+=(files)
+
+# Settings (core store: admin settings, plugin settings such as the
+# Meilisearch host and indexing key) and webhooks. A development machine
+# keeps its own, otherwise editing content there would update production's
+# search index and fire production webhooks.
+if [ "$WITH_CONFIG" = false ] && [ "$ON_SERVER" = false ]; then
+  EXCLUDE+=(config)
+fi
+
 IMPORT_ARGS=(-f "$IMPORT_FILENAME" --force)
-if [[ "$IMPORT_FILENAME" == *.tar ]]; then
-  if tar -tf "$IMPORT_FILE" 2>/dev/null | grep -q '^assets/uploads/'; then
-    info_msg "Backup includes media files (existing media will be replaced)"
-  else
-    warn_msg "Backup has no media files: importing with --exclude files, existing media is left untouched"
-    IMPORT_ARGS+=(--exclude files)
-  fi
+if [ ${#EXCLUDE[@]} -gt 0 ]; then
+  IMPORT_ARGS+=(--exclude "$(IFS=,; echo "${EXCLUDE[*]}")")
 fi
 
 # Ensure the file is in the current working directory for Strapi to find it
@@ -422,44 +479,39 @@ if [ ! -f ".env" ]; then
   error_exit ".env file not found"
 fi
 
-DB_CLIENT=$(grep "^DATABASE_CLIENT=" .env | cut -d '=' -f2 | tr -d '"' | tr -d "'")
-DB_HOST=$(grep "^DATABASE_HOST=" .env | cut -d '=' -f2 | tr -d '"' | tr -d "'")
-DB_PORT=$(grep "^DATABASE_PORT=" .env | cut -d '=' -f2 | tr -d '"' | tr -d "'")
-DB_NAME=$(grep "^DATABASE_NAME=" .env | cut -d '=' -f2 | tr -d '"' | tr -d "'")
-DB_USER=$(grep "^DATABASE_USERNAME=" .env | cut -d '=' -f2 | tr -d '"' | tr -d "'")
-DB_PASS=$(grep "^DATABASE_PASSWORD=" .env | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+DB_CLIENT=$(env_file_value DATABASE_CLIENT)
+DB_HOST=$(env_file_value DATABASE_HOST)
+DB_PORT=$(env_file_value DATABASE_PORT)
+DB_NAME=$(env_file_value DATABASE_NAME)
+DB_USER=$(env_file_value DATABASE_USERNAME)
+DB_PASS=$(env_file_value DATABASE_PASSWORD)
 
 # Set defaults
 DB_CLIENT=${DB_CLIENT:-mysql}
 DB_HOST=${DB_HOST:-localhost}
 DB_PORT=${DB_PORT:-3306}
 
-# Validate required fields
-if [ -z "$DB_NAME" ]; then
-  error_exit "DATABASE_NAME not found in .env"
+info_msg "Database: ${DB_NAME:-(default)} (${DB_CLIENT})"
+
+if [ "$RECREATE_TABLES" = true ] && [ "$DB_CLIENT" != "mysql" ]; then
+  error_exit "--recreate-tables only works with MySQL"
 fi
 
-if [ -z "$DB_USER" ]; then
-  error_exit "DATABASE_USERNAME not found in .env"
-fi
-
-success_msg "Database credentials loaded"
-info_msg "Database: $DB_NAME (${DB_CLIENT})"
-
-# Only proceed with backup and cleanup if MySQL (SQLite doesn't need this)
 if [ "$DB_CLIENT" = "mysql" ]; then
+  # Validate required fields
+  [ -n "$DB_NAME" ] || error_exit "DATABASE_NAME not found in .env"
+  [ -n "$DB_USER" ] || error_exit "DATABASE_USERNAME not found in .env"
+
   # Check if mysql/mysqldump are available
   if ! command -v mysql &> /dev/null || ! command -v mysqldump &> /dev/null; then
-    error_exit "mysql/mysqldump not found. Please install MySQL client tools."
+    error_exit "mysql/mysqldump not found. Please install MySQL client tools (macOS: brew install mysql-client)."
   fi
 
-  # Build mysql command
+  # Password through the environment: on the command line other users of a
+  # shared server could read it in the process list
+  export MYSQL_PWD="$DB_PASS"
   MYSQL_CMD="mysql -h $DB_HOST -P $DB_PORT -u $DB_USER"
   MYSQLDUMP_CMD="mysqldump -h $DB_HOST -P $DB_PORT -u $DB_USER"
-  if [ -n "$DB_PASS" ]; then
-    MYSQL_CMD="$MYSQL_CMD -p$DB_PASS"
-    MYSQLDUMP_CMD="$MYSQLDUMP_CMD -p$DB_PASS"
-  fi
 
   # Test database connection
   info_msg "Testing database connection..."
@@ -471,62 +523,69 @@ if [ "$DB_CLIENT" = "mysql" ]; then
   echo ""
   info_msg "Creating database backup before import..."
 
-  # Create backup filename with timestamp
-  BACKUP_TIMESTAMP=$(date +%s)
-  BACKUP_FILE="db-dump-${BACKUP_TIMESTAMP}.sql.gz"
+  mkdir -p "$SAFE_DIR" || error_exit "Cannot create $SAFE_DIR"
+  BACKUP_FILE="$SAFE_DIR/db-dump-$(date +%s).sql.gz"
 
   # Create backup
   $MYSQLDUMP_CMD --single-transaction --quick --lock-tables=false $DB_NAME | gzip > "$BACKUP_FILE" || {
     error_exit "Database backup failed"
   }
 
-  # Verify backup file exists and has content
-  if [ ! -f "$BACKUP_FILE" ]; then
-    error_exit "Backup file was not created"
-  fi
-
-  BACKUP_SIZE=$(stat -f%z "$BACKUP_FILE" 2>/dev/null || stat -c%s "$BACKUP_FILE" 2>/dev/null)
+  BACKUP_SIZE=$(wc -c < "$BACKUP_FILE" | tr -d ' ')
   if [ "$BACKUP_SIZE" -lt 100 ]; then
     error_exit "Backup file is suspiciously small ($BACKUP_SIZE bytes)"
   fi
 
   BACKUP_SIZE_FORMATTED=$(format_bytes $BACKUP_SIZE)
   success_msg "Database backup created: $BACKUP_FILE ($BACKUP_SIZE_FORMATTED)"
+fi
 
+PM2_MANAGER="$TOOLKIT_DIR/pm2/pm2-manager.sh"
+STOP_APP=false
+if [ "$ON_SERVER" = true ] && [ -f "$PM2_MANAGER" ] && { [ -f ecosystem.config.cjs ] || [ -f ecosystem.config.js ]; }; then
+  STOP_APP=true
+fi
+
+echo ""
+echo "========================================"
+echo "    Import Confirmation"
+echo "========================================"
+echo ""
+warn_msg "This replaces the content of ${DB_NAME:-the database} with the backup: $TARGET_FILE"
+if [ "$RECREATE_TABLES" = true ]; then
+  warn_msg "--recreate-tables: ALL tables in '$DB_NAME' are dropped first. If the import then fails, restore the safety dump."
+else
+  info_msg "Strapi imports in one transaction: if the import fails, it is rolled back"
+fi
+if [ -n "$EXCLUDE_MEDIA_REASON" ]; then
+  info_msg "Media files: left untouched ($EXCLUDE_MEDIA_REASON)"
+else
+  warn_msg "Media files: ALL current media files are deleted and replaced by the backup's"
+fi
+if [[ " ${EXCLUDE[*]} " == *" config "* ]]; then
+  info_msg "Settings, webhooks, plugin settings: this machine keeps its own (--with-config to import them)"
+else
+  warn_msg "Settings, webhooks, plugin settings (e.g. Meilisearch host and keys): taken from the backup"
+fi
+if [ "$STOP_APP" = true ]; then
+  warn_msg "The app is stopped during the import (PM2) and restarted after"
+elif [ "$ON_SERVER" = false ]; then
+  info_msg "Stop 'npm run develop' first if it is running"
+fi
+if [ -n "$BACKUP_FILE" ]; then
   echo ""
-  echo "========================================"
-  echo "    Drop Tables Confirmation"
-  echo "========================================"
-  echo ""
+  info_msg "Safety dump: $BACKUP_FILE"
+  echo "  Restore with: gunzip < $BACKUP_FILE | mysql -h $DB_HOST -P $DB_PORT -u $DB_USER -p $DB_NAME"
+fi
+echo ""
 
-  warn_msg "⚠️  WARNING: This will DROP ALL TABLES in database '$DB_NAME'"
-  echo ""
-  info_msg "✅ Backup saved to: $BACKUP_FILE"
-  info_msg "📦 Import file: $TARGET_FILE"
-  echo ""
-  warn_msg "If import fails, restore with:"
-  echo "  gunzip < $BACKUP_FILE | mysql -u $DB_USER -p $DB_NAME"
-  echo ""
+read -p "Continue with the import? (yes/NO): " CONFIRM
+if [[ ! "${CONFIRM:-no}" =~ ^[Yy][Ee][Ss]$ ]]; then
+  info_msg "Import cancelled by user"
+  exit 0
+fi
 
-  read -p "Continue with dropping all tables? (yes/NO): " CONFIRM
-
-  # Default to "no" if empty
-  if [ -z "$CONFIRM" ]; then
-    CONFIRM="no"
-  fi
-
-  if [[ ! "$CONFIRM" =~ ^[Yy][Ee][Ss]$ ]]; then
-    info_msg "Import cancelled by user"
-    info_msg "Backup file preserved: $BACKUP_FILE"
-
-    # Clean up copied file if user cancels
-    if [ -n "$TEMP_COPIED_FILE" ] && [ -f "$TEMP_COPIED_FILE" ]; then
-      rm -f "$TEMP_COPIED_FILE"
-    fi
-
-    exit 0
-  fi
-
+if [ "$RECREATE_TABLES" = true ]; then
   echo ""
   echo "========================================"
   echo "    Clearing Database"
@@ -636,33 +695,12 @@ if [ "$DB_CLIENT" = "mysql" ]; then
     info_msg "Imported tables will use utf8mb4/utf8mb4_unicode_ci"
   fi
 
-else
-  # SQLite or other database
-  info_msg "Skipping database backup and cleanup for $DB_CLIENT"
+fi
 
+if [ "$STOP_APP" = true ]; then
   echo ""
-  warn_msg "About to import backup with --force flag (this will overwrite existing data)"
-  info_msg "Import file: $TARGET_FILE"
-  echo ""
-
-  # Prompt for confirmation
-  read -p "Continue with import? (yes/NO): " CONFIRM
-
-  # Default to "no" if empty
-  if [ -z "$CONFIRM" ]; then
-    CONFIRM="no"
-  fi
-
-  if [[ ! "$CONFIRM" =~ ^[Yy][Ee][Ss]$ ]]; then
-    info_msg "Import cancelled by user"
-
-    # Clean up copied file if user cancels
-    if [ -n "$TEMP_COPIED_FILE" ] && [ -f "$TEMP_COPIED_FILE" ]; then
-      rm -f "$TEMP_COPIED_FILE"
-    fi
-
-    exit 0
-  fi
+  bash "$PM2_MANAGER" stop || error_exit "Could not stop the app"
+  APP_STOPPED=true
 fi
 
 echo ""
@@ -674,13 +712,24 @@ echo ""
 info_msg "Starting import with DATA_IMPORT_MODE enabled..."
 echo ""
 
-# Run the import with DATA_IMPORT_MODE for extended MySQL lock timeout
-# This sets innodb_lock_wait_timeout to 900 seconds for long-running transactions
-# Note: Setting the variable inline ensures it ONLY applies to this command
-DATA_IMPORT_MODE=true npm run strapi import -- "${IMPORT_ARGS[@]}" || {
+# DATA_IMPORT_MODE lets an app's database config raise innodb_lock_wait_timeout
+# for this long transaction (only if the app reads it; the boilerplate doesn't)
+IMPORT_STATUS=0
+DATA_IMPORT_MODE=true npm run strapi import -- "${IMPORT_ARGS[@]}" || IMPORT_STATUS=$?
+
+if [ "$STOP_APP" = true ]; then
   echo ""
-  error_exit "Backup import failed. Restore from: $BACKUP_FILE"
-}
+  APP_STOPPED=false
+  bash "$PM2_MANAGER" restart || warn_msg "The app did not come back up, check: bash $PM2_MANAGER logs"
+fi
+
+if [ "$IMPORT_STATUS" -ne 0 ]; then
+  echo ""
+  if [ "$RECREATE_TABLES" = true ]; then
+    error_exit "Backup import failed after the tables were dropped. Restore the safety dump: $BACKUP_FILE"
+  fi
+  error_exit "Backup import failed and was rolled back by Strapi. If anything looks wrong, restore the safety dump: ${BACKUP_FILE:-(none, not MySQL)}"
+fi
 
 echo ""
 success_msg "Import completed successfully"

@@ -63,8 +63,9 @@ if [ -f ".nvmrc" ] && command -v nvm &> /dev/null; then
 fi
 
 # Default configuration
-OUTPUT_DIR="."
+OUTPUT_DIR=""
 NO_MEDIA=false
+LOCAL_ONLY=false
 KEEP_LOCAL=false
 # Expiry of the --link download URL (empty = no link)
 LINK_EXPIRE=""
@@ -101,6 +102,10 @@ while [[ $# -gt 0 ]]; do
       NO_MEDIA=true
       shift
       ;;
+    --local-only)
+      LOCAL_ONLY=true
+      shift
+      ;;
     --keep-local)
       KEEP_LOCAL=true
       shift
@@ -125,10 +130,12 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: $0 [OPTIONS]"
       echo ""
       echo "Options:"
-      echo "  --output=DIR    Specify output directory for backup (default: current directory)"
+      echo "  --output=DIR    Where the local archive goes (default: ~/private_html/strapi-backups/<app>"
+      echo "                  on servers, ./backups on a development machine). Never inside public/"
       echo "  --output DIR    Alternative syntax for output directory"
-      echo "  --no-media      Local backup without media files (database, media library records"
-      echo "                  and config only). Nothing is uploaded to the backup bucket."
+      echo "  --local-only    Keep the backup on this machine, upload nothing. Servers refuse to"
+      echo "                  back up without the backup bucket unless this is given"
+      echo "  --no-media      Leave media files out (media library records are still included)"
       echo "  --keep-local    Keep the local archive after uploading it to the backup bucket"
       echo "  --link          Print a temporary download URL for the uploaded archive (valid 24h),"
       echo "                  e.g. for import.sh on another server. Anyone with the URL can"
@@ -140,15 +147,14 @@ while [[ $# -gt 0 ]]; do
       echo "  -h, --help      Show this help message"
       echo ""
       echo "Example:"
-      echo "  $0 --output=./public"
-      echo "  $0 --output ./backups"
-      echo "  $0 --no-media --output ./backups"
+      echo "  $0 --link            # production: upload, print a download URL"
+      echo "  $0 --local-only      # archive on this machine only"
       echo ""
       echo "Remote backups (BACKUP_R2_* in .env, see .env.example):"
       echo "  The archive is uploaded to <BACKUP_R2_BUCKET>/<app>/db/ and removed locally."
       echo "  Sites with R2/S3 media export the database only and copy the media bucket"
-      echo "  to <BACKUP_R2_BUCKET>/<app>/media/ instead. They refuse to run without"
-      echo "  BACKUP_R2_*, unless --no-media is given."
+      echo "  to <BACKUP_R2_BUCKET>/<app>/media/ instead."
+      echo "  On servers BACKUP_R2_* is required, unless --local-only is given."
       exit 0
       ;;
     *)
@@ -313,6 +319,18 @@ if ! [[ "$STALL_TIMEOUT" =~ ^[0-9]+$ ]]; then
   error_exit "--stall-timeout must be a number of seconds (0 = never): $STALL_TIMEOUT"
 fi
 
+# Servers keep apps in public_html; anywhere else is a development machine
+if [[ "$PWD" == */public_html/* ]]; then
+  ON_SERVER=true
+  # Next to the deploy's pre-deploy dumps: outside the web root, never touched by deploys
+  DEFAULT_OUTPUT_DIR="$(eval echo "~$(id -un)")/private_html/strapi-backups/$(basename "$PWD")"
+else
+  ON_SERVER=false
+  # Ignored by git and excluded from deploy rsync
+  DEFAULT_OUTPUT_DIR="$PWD/backups"
+fi
+OUTPUT_DIR=${OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}
+
 # Media stored in R2/S3: Strapi's export would download every file over HTTP and
 # can hang forever, so these sites export the database only and copy the bucket
 MEDIA_BUCKET=$(env_value AWS_BUCKET)
@@ -343,8 +361,8 @@ if [ -n "$LINK_EXPIRE" ]; then
   if [ "$LINK_SECONDS" -lt 1 ] || [ "$LINK_SECONDS" -gt 604800 ]; then
     error_exit "--link expiry must be between 1s and 7d: $LINK_EXPIRE"
   fi
-  if [ "$NO_MEDIA" = true ]; then
-    error_exit "--link needs an uploaded backup, but --no-media only makes a local one"
+  if [ "$LOCAL_ONLY" = true ]; then
+    error_exit "--link needs an uploaded backup, but --local-only keeps it on this machine"
   fi
 fi
 
@@ -354,37 +372,40 @@ for var in BACKUP_R2_ENDPOINT BACKUP_R2_ACCESS_KEY_ID BACKUP_R2_SECRET_ACCESS_KE
 done
 
 UPLOAD=false
-EXCLUDE_MEDIA=false
-if [ "$NO_MEDIA" = true ]; then
-  EXCLUDE_MEDIA=true
-  info_msg "--no-media: local backup only, nothing is uploaded"
+if [ "$LOCAL_ONLY" = true ]; then
+  info_msg "--local-only: the backup stays on this machine, nothing is uploaded"
 elif [ ${#MISSING_BACKUP_VARS[@]} -eq 0 ]; then
   UPLOAD=true
-  [ "$REMOTE_MEDIA" = true ] && EXCLUDE_MEDIA=true
-elif [ ${#MISSING_BACKUP_VARS[@]} -lt 3 ] || [ "$REMOTE_MEDIA" = true ]; then
-  # Half-configured, or R2 media with nowhere to back it up to
+elif [ ${#MISSING_BACKUP_VARS[@]} -lt 3 ] || [ "$ON_SERVER" = true ]; then
+  # Half-configured, or a server with nowhere off-site to put its backup
   echo ""
-  if [ "$REMOTE_MEDIA" = true ]; then
-    echo -e "${RED}[✗] This site stores its media in R2/S3 (bucket: ${MEDIA_BUCKET}), so its backup${NC}"
-    echo -e "${RED}    goes to the remote backup bucket, which is not set up in .env.${NC}"
-  else
+  if [ ${#MISSING_BACKUP_VARS[@]} -lt 3 ]; then
     echo -e "${RED}[✗] The remote backup bucket is only partly set up in .env.${NC}"
+  else
+    echo -e "${RED}[✗] Backups on a server go to the remote backup bucket, which is not set up in .env.${NC}"
   fi
   echo -e "${RED}    Missing: ${MISSING_BACKUP_VARS[*]} (see .env.example)${NC}"
   echo ""
-  echo "    Or make a local backup without media files:"
-  echo "      bash ${BASH_SOURCE[0]} --no-media"
+  echo "    Or keep this backup on this machine only:"
+  echo "      bash ${BASH_SOURCE[0]} --local-only"
   exit 1
 else
-  [ -n "$LINK_EXPIRE" ] && error_exit "--link needs the remote backup bucket (BACKUP_R2_* in .env, see .env.example)"
-  info_msg "BACKUP_R2_* not set in .env: the backup stays on this server"
+  info_msg "BACKUP_R2_* not set in .env: the backup stays on this machine"
 fi
+[ -n "$LINK_EXPIRE" ] && [ "$UPLOAD" = false ] && error_exit "--link needs the remote backup bucket (BACKUP_R2_* in .env, see .env.example)"
+
+# R2/S3 media is never put in the archive (see above); it is copied to the
+# backup bucket instead, unless --no-media
+EXCLUDE_MEDIA=false
+{ [ "$NO_MEDIA" = true ] || [ "$REMOTE_MEDIA" = true ]; } && EXCLUDE_MEDIA=true
+COPY_MEDIA=false
+[ "$UPLOAD" = true ] && [ "$REMOTE_MEDIA" = true ] && [ "$NO_MEDIA" = false ] && COPY_MEDIA=true
 
 if [ "$UPLOAD" = true ]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   BACKUP_DEST="${BACKUP_APP_NAME}"
 
-  if [ "$REMOTE_MEDIA" = true ]; then
+  if [ "$COPY_MEDIA" = true ]; then
     MEDIA_S3_ENDPOINT=$(env_value AWS_ENDPOINT)
     MEDIA_S3_REGION=$(env_value AWS_REGION)
     MEDIA_S3_ACCESS_KEY_ID=$(env_value AWS_ACCESS_KEY_ID)
@@ -393,7 +414,7 @@ if [ "$UPLOAD" = true ]; then
   fi
 
   # Fail now on wrong credentials or a missing AWS SDK, not after the export
-  if [ "$REMOTE_MEDIA" = true ]; then
+  if [ "$COPY_MEDIA" = true ]; then
     backup_tool check media || error_exit "Remote backup check failed (see above), nothing was exported"
     success_msg "Backup bucket ${BACKUP_R2_BUCKET} and media bucket ${MEDIA_BUCKET} reachable"
   else
@@ -403,27 +424,24 @@ if [ "$UPLOAD" = true ]; then
 fi
 
 # Handle output directory
-if [ "$OUTPUT_DIR" != "." ]; then
-  info_msg "Output directory: $OUTPUT_DIR"
-
-  # Create output directory if it doesn't exist
-  if [ ! -d "$OUTPUT_DIR" ]; then
-    info_msg "Creating output directory..."
-    mkdir -p "$OUTPUT_DIR" || error_exit "Failed to create output directory: $OUTPUT_DIR"
-    success_msg "Output directory created"
-  fi
-
-  # Verify directory is writable
-  if [ ! -w "$OUTPUT_DIR" ]; then
-    error_exit "Output directory is not writable: $OUTPUT_DIR"
-  fi
-  success_msg "Output directory is writable"
-else
-  info_msg "Using current directory for output"
+case "$OUTPUT_DIR" in
+  /*) ;;
+  *) OUTPUT_DIR="$PWD/$OUTPUT_DIR" ;;
+esac
+info_msg "Output directory: $OUTPUT_DIR"
+# Strapi serves public/ to anyone: a backup there could be downloaded from the site
+if [[ "$OUTPUT_DIR/" == "$PWD/public/"* ]]; then
+  error_exit "Refusing to write a backup inside public/, which the site serves to anyone: $OUTPUT_DIR"
 fi
+mkdir -p "$OUTPUT_DIR" || error_exit "Failed to create output directory: $OUTPUT_DIR"
+[ -w "$OUTPUT_DIR" ] || error_exit "Output directory is not writable: $OUTPUT_DIR"
+OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd -P)
 
-# Convert to absolute path
-OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd)
+# Same check on the real path (symlinks)
+PUBLIC_DIR=$(cd public 2>/dev/null && pwd -P || true)
+if [ -n "$PUBLIC_DIR" ] && [[ "$OUTPUT_DIR/" == "$PUBLIC_DIR/"* ]]; then
+  error_exit "Refusing to write a backup inside public/, which the site serves to anyone: $OUTPUT_DIR"
+fi
 
 echo ""
 info_msg "Starting backup export..."
@@ -433,10 +451,12 @@ EXPORT_ARGS=(-f "$BACKUP_FILENAME" --no-encrypt)
 if [ "$EXCLUDE_MEDIA" = true ]; then
   # Media library records still go into the archive (entities stage), only the files are left out
   EXPORT_ARGS+=(--exclude files)
-  if [ "$NO_MEDIA" = true ]; then
-    warn_msg "--no-media: media files are not in this backup, back them up separately"
+  if [ "$COPY_MEDIA" = true ]; then
+    info_msg "Exporting without media files, the media bucket is copied after the export"
+  elif [ "$NO_MEDIA" = true ]; then
+    warn_msg "--no-media: media files are not in this backup"
   else
-    info_msg "Exporting the database only, the media bucket is copied after the export"
+    warn_msg "Media files are in R2/S3 and not in this backup (only uploaded backups copy them)"
   fi
   echo ""
 fi
@@ -529,7 +549,7 @@ if [ "$UPLOAD" = true ]; then
       || warn_msg "Could not create the download link, the backup itself is uploaded"
   fi
 
-  if [ "$REMOTE_MEDIA" = true ]; then
+  if [ "$COPY_MEDIA" = true ]; then
     # After the database export, so every file the backup refers to is copied.
     # Never deletes in the backup; files already copied are skipped
     echo ""
@@ -559,10 +579,10 @@ else
 fi
 echo "Size: $BACKUP_SIZE_FORMATTED"
 echo "Duration: $DURATION_FORMATTED"
-if [ "$NO_MEDIA" = true ]; then
-  echo "Media: not included (--no-media)"
-elif [ "$UPLOAD" = true ] && [ "$REMOTE_MEDIA" = true ]; then
+if [ "$COPY_MEDIA" = true ]; then
   echo "Media: ${BACKUP_R2_BUCKET}/${BACKUP_APP_NAME}/media/"
+elif [ "$EXCLUDE_MEDIA" = true ]; then
+  echo "Media: not included"
 fi
 if [ -n "${DOWNLOAD_URL:-}" ]; then
   echo ""
