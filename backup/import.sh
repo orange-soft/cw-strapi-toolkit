@@ -225,7 +225,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h|--help)
-      echo "Usage: $0 [OPTIONS]"
+      echo "Usage: $0 [URL | FILE] [OPTIONS]"
       echo ""
       echo "Options:"
       echo "  --file=PATH     Use a local backup file instead of downloading from URL"
@@ -239,15 +239,24 @@ while [[ $# -gt 0 ]]; do
       echo "  -h, --help      Show this help message"
       echo ""
       echo "Examples:"
-      echo "  $0                                    # Interactive mode: prompts for URL"
-      echo "  $0 --file=./backup-123123.tar.gz     # Use local file"
-      echo "  $0 --file ./backups/backup.tar.gz    # Use local file"
+      echo "  $0 'https://…'                        # Download URL, e.g. from export.sh --link (quote it)"
+      echo "  $0 ./backups/backup-1793279099.tar.gz # Local archive"
+      echo "  $0                                    # Prompts for a URL"
       exit 0
       ;;
-    *)
+    http://*|https://*)
+      BACKUP_URL="$1"
+      shift
+      ;;
+    -*)
       echo -e "${RED}[✗] Unknown option: $1${NC}"
       echo "Use --help for usage information"
       exit 1
+      ;;
+    *)
+      # A plain argument is a local archive (tab completion works)
+      LOCAL_FILE="$1"
+      shift
       ;;
   esac
 done
@@ -311,13 +320,16 @@ else
   success_msg "curl is available"
 
   # Prompt for URL
-  read -p "Enter the backup file URL: " BACKUP_URL
+  if [ -z "$BACKUP_URL" ]; then
+    read -p "Enter the backup file URL: " BACKUP_URL
+  fi
 
   if [ -z "$BACKUP_URL" ]; then
     error_exit "No URL provided"
   fi
 
-  info_msg "Backup URL: $BACKUP_URL"
+  # Without the query: a presigned URL's signature lets anyone download the backup
+  info_msg "Backup URL: ${BACKUP_URL%%\?*}"
 
   # Extract filename from URL
   FILENAME=$(basename "$BACKUP_URL" | sed 's/?.*//')
@@ -775,7 +787,7 @@ echo "========================================"
 echo "    Import Summary"
 echo "========================================"
 if [ -n "$BACKUP_URL" ]; then
-  echo "Source: $BACKUP_URL"
+  echo "Source: ${BACKUP_URL%%\?*}"
 else
   echo "Source: Local file"
 fi

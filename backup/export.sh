@@ -642,7 +642,7 @@ if [ -n "${DOWNLOAD_URL:-}" ]; then
   echo "Download (valid ${LINK_EXPIRE}, anyone with this URL can download the backup):"
   echo "$DOWNLOAD_URL"
   echo ""
-  echo "Restore on another server: bash strapi-toolkit/backup/import.sh, then paste the URL"
+  echo "Restore elsewhere (quotes included): bash strapi-toolkit/backup/import.sh '$DOWNLOAD_URL'"
 fi
 echo "========================================"
 echo ""
