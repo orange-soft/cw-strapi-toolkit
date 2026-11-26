@@ -4,7 +4,7 @@ Server setup tools for running Strapi sites on a cPanel/WHM server, one site per
 
 | Script | Run as | Purpose |
 |---|---|---|
-| `setup-site.sh` | the site's cPanel user | One-time setup of a new site: authorizes the deploy key, creates a GitHub deploy key, installs NVM + the `.nvmrc` Node, clones the repo into `~/public_html/<repo>`, creates `.env` with generated secrets, suggests a free `STRAPI_PORT` |
+| `setup-site.sh` | the site's cPanel user | One-time setup of a new site: authorizes the deploy key, creates a GitHub deploy key, installs NVM + the `.nvmrc` Node, clones the repo into `~/public_html/<repo>`, creates `.env` with generated secrets (plus the CMS gate key and entry link when the app's `.env.example` has `CMS_GATE_KEY`), suggests a free `STRAPI_PORT` |
 | `pm2-boot-service.sh` | root, once per server | Installs a systemd service that restores every user's PM2 apps after a reboot (after MySQL is up) |
 | `generate-deploy-key.sh` | the site's cPanel user | Optional helper: generates the deploy keypair (`~/.ssh/deploy_<user>`) and prints what to paste where |
 

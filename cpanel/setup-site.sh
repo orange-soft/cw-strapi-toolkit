@@ -203,6 +203,22 @@ elif [ -f "$APP_DIR/.env.example" ]; then
             sed -i "s|^ADMIN_ENCRYPTION_KEY=.*|ADMIN_ENCRYPTION_KEY=${ADMIN_ENCRYPTION_KEY}|" "$APP_DIR/.env" || \
             echo "ADMIN_ENCRYPTION_KEY=${ADMIN_ENCRYPTION_KEY}" >> "$APP_DIR/.env"
 
+        # CMS gate (strapi-boilerplate README "CMS gate"): only for apps whose
+        # .env.example has it, so an older app never gets a gate switched on
+        # by a later boilerplate sync before its frontend has the key. Hex,
+        # because CMS_GATE_ENTRY is part of a URL.
+        if grep -q "^CMS_GATE_KEY=" "$APP_DIR/.env"; then
+            GEN_HEX="node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
+            CMS_GATE_KEY=$(eval $GEN_HEX)
+            CMS_GATE_ENTRY=$(eval $GEN_HEX)
+            sed -i "s|^CMS_GATE_KEY=.*|CMS_GATE_KEY=${CMS_GATE_KEY}|" "$APP_DIR/.env"
+            grep -q "^CMS_GATE_ENTRY=" "$APP_DIR/.env" && \
+                sed -i "s|^CMS_GATE_ENTRY=.*|CMS_GATE_ENTRY=${CMS_GATE_ENTRY}|" "$APP_DIR/.env" || \
+                echo "CMS_GATE_ENTRY=${CMS_GATE_ENTRY}" >> "$APP_DIR/.env"
+            CMS_GATE_GENERATED=true
+            echo "  CMS gate key and entry link generated (CMS_GATE_KEY, CMS_GATE_ENTRY)"
+        fi
+
         echo "  Secrets generated and written to .env"
     else
         echo "  Warning: Node.js not found, skipping key generation"
@@ -279,3 +295,13 @@ echo "                               (view it with: cat ~/.ssh/deploy_${CPANEL_U
 echo ""
 echo "  3. Push to the deploy branch (same name as the environment) to trigger the first deploy"
 echo ""
+if [ "${CMS_GATE_GENERATED:-false}" = true ]; then
+    echo "  4. CMS gate is ON: everything except the frontend and editors gets a 404."
+    echo "     - Frontend (Vercel, every environment): NUXT_CMS_GATE_KEY = this site's CMS_GATE_KEY"
+    echo "       (view it with: grep '^CMS_GATE_KEY=' $APP_DIR/.env)"
+    echo "       Set it before the frontend's first build against this CMS."
+    echo "     - Editors' entry link: https://<cms-host>/gate/<CMS_GATE_ENTRY>"
+    echo "       (view it with: grep '^CMS_GATE_ENTRY=' $APP_DIR/.env)"
+    echo "       Save it in the password manager with the site's credentials and send it to the editors."
+    echo ""
+fi
